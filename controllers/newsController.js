@@ -39,7 +39,7 @@ const createNews = async (req, res) => {
       category,
       tags,
       status: status || "draft",
-      author: req.user._id,
+      author: req.user._id ,
     });
 
     res.status(201).json({

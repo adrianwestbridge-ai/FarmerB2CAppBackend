@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+const { protect, adminOnly } = require("../middleware/authMiddleware");
 
 const {
   createUser,
@@ -14,6 +15,12 @@ const {
   adminLogin,
 } = require("../controllers/userController.js");
 
+router.get("/me", protect, (req, res) => {
+  res.status(200).json({
+    success: true,
+    user: req.user,
+  });
+});
 
 router.post("/register", registerUser);
 

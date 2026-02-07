@@ -14,7 +14,7 @@ const isStrongPassword = (password) =>
 // ---------------- AUTH ----------------
 const registerUser = async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, email, password,avatar,bio } = req.body;
 
     if (!name || !email || !password)
       return res.status(400).json({ success: false, message: "All fields required" });
@@ -32,6 +32,8 @@ const registerUser = async (req, res) => {
       email,
       password: hashedPassword,
       role: "user",
+      avatar:avatar||"",
+      bio: bio||""
     });
 
     const token = jwt.sign(
@@ -68,24 +70,46 @@ const loginUser = async (req, res) => {
 
 // ---------------- ADMIN LOGIN ----------------
 const adminLogin = async (req, res) => {
-    try {
-        const { email, password } = req.body;
+  try {
+    const { email, password } = req.body;
 
-        const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
-        const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+    const admin = await User.findOne({ email, role: "admin" }).select("+password");
 
-        if (email !== ADMIN_EMAIL || password !== ADMIN_PASSWORD) {
-            return res.status(400).json({ success: false, message: "Invalid email or password" });
-        }
-
-        const token = jwt.sign({ role: "admin" }, JWT_SECRET, { expiresIn: "1d" });
-
-        res.json({ success: true, token, message: "Admin login successful" });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ success: false, message: error.message });
+    if (!admin) {
+      return res.status(401).json({
+        success: false,
+        message: "Admin not found",
+      });
     }
+
+    const isMatch = await bcrypt.compare(password, admin.password);
+
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid credentials",
+      });
+    }
+
+    const token = jwt.sign(
+      { id: admin._id, role: admin.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "1d" }
+    );
+
+    res.json({
+      success: true,
+      token,
+      message: "Admin login successful",
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
 };
+
 
 // ---------------- ADMIN USERS ----------------
 const createUser = async (req, res) => {
