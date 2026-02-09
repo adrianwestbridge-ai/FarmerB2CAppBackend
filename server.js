@@ -6,6 +6,10 @@ const newsRoutes = require("./routes/newsRoutes.js");
 const categoryRoutes = require("./routes/categoryRoutes.js");
 const tagRoutes = require("./routes/tagRoutes.js");
 const userRoutes = require("./routes/usersRoutes");
+const authRoutes = require("./routes/auth");
+const passport = require("passport");
+const session = require("express-session");
+require("./config/passport"); // just require it, no variable needed
 
 //App Config
 const app = express();
@@ -16,9 +20,35 @@ connectDB();
 //Middlewares
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(cors());
+app.use(
+  cors({
+    origin: process.env.FRONTEND_URL, // your React app
+    credentials: true,
+  })
+);
 
-//api endpoints
+// Session (required for passport-google-oauth)
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: false, // true only in HTTPS
+      maxAge: 1000 * 60 * 60 * 24, // 1 day
+      sameSite: "lax",//diffrent front and backend
+    },
+  })
+);
+
+
+// Passport
+app.use(passport.initialize());
+app.use(passport.session());
+
+// Routes
+app.use("/auth", authRoutes);
 app.use("/api/categories", categoryRoutes);
 app.use("/api/news",newsRoutes );
 app.use("/api/tags", tagRoutes);

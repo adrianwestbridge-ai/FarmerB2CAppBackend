@@ -2,6 +2,12 @@ const mongoose = require("mongoose");
 
 const userSchema = new mongoose.Schema(
   {
+    googleId: {
+      type: String,
+      unique: true,
+      sparse: true, // allows null for non-Google users
+    },
+
     name: {
       type: String,
       required: true,
@@ -18,9 +24,11 @@ const userSchema = new mongoose.Schema(
 
     password: {
       type: String,
-      required: true,
       minlength: 6,
-      select: false, // hide password by default
+      select: false,
+      required: function () {
+        return !this.googleId; // password required ONLY for non-Google users
+      },
     },
 
     role: {
@@ -52,7 +60,7 @@ const userSchema = new mongoose.Schema(
     },
   },
   {
-    timestamps: true, // creates createdAt & updatedAt automatically
+    timestamps: true,
   }
 );
 

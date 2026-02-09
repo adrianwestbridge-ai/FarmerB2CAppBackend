@@ -22,8 +22,24 @@ const registerUser = async (req, res) => {
     if (!isValidEmail(email) || !isStrongPassword(password))
       return res.status(400).json({ success: false, message: "Invalid input" });
 
-    if (await User.findOne({ email }))
-      return res.status(409).json({ success: false, message: "Email already registered" });
+    // 🔍 Check if user already exists
+    const existingUser = await User.findOne({ email });
+
+    // 🔐 Google-only account trying password signup
+    if (existingUser && existingUser.googleId && !existingUser.password) {
+      return res.status(400).json({
+        success: false,
+        message: "This account uses Google Sign-In. Please login with Google.",
+      });
+    }
+
+    // ❌ Email already registered (normal user)
+    if (existingUser) {
+      return res.status(409).json({
+        success: false,
+        message: "Email already registered",
+      });
+    }
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
@@ -52,21 +68,61 @@ const loginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    const user = await User.findOne({ email }).select("+password");
-    if (!user || !(await bcrypt.compare(password, user.password)))
-      return res.status(400).json({ success: false, message: "Invalid credentials" });
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: "Email and password are required",
+      });
+    }
 
+    // 🔍 Find user (include password)
+    const user = await User.findOne({ email }).select("+password");
+
+    // ❌ User not found
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid credentials",
+      });
+    }
+
+    // 🔐 Google-only account
+    if (user.googleId && !user.password) {
+      return res.status(400).json({
+        success: false,
+        message: "This account uses Google Sign-In. Please login with Google.",
+      });
+    }
+
+    // ❌ Password mismatch
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid credentials",
+      });
+    }
+
+    // ✅ Login success
     const token = jwt.sign(
       { id: user._id, role: user.role },
-      JWT_SECRET,
+      process.env.JWT_SECRET,
       { expiresIn: "1d" }
     );
 
-    res.json({ success: true, token,message: "Login successful" });
+    res.json({
+      success: true,
+      token,
+      message: "Login successful",
+    });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({
+      success: false,
+      message: err.message,
+    });
   }
 };
+
 
 // ---------------- ADMIN LOGIN ----------------
 const adminLogin = async (req, res) => {
