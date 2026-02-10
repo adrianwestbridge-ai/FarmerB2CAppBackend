@@ -20,12 +20,21 @@ connectDB();
 //Middlewares
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+const allowedOrigins = [process.env.FRONTEND_URL, process.env.SECONDARY_URL].filter(Boolean);
+
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL, // your React app
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     credentials: true,
   })
 );
+
 
 // Session (required for passport-google-oauth)
 app.use(

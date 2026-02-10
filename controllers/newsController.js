@@ -3,6 +3,7 @@ const Category = require("../models/Category");
 const Tag = require("../models/Tag");
 const User = require("../models/User");
 const slugify = require("slugify");
+const mongoose = require("mongoose");
 
 /**
  * @desc    Create news
@@ -39,7 +40,7 @@ const createNews = async (req, res) => {
       category,
       tags,
       status: status || "draft",
-      author: req.user._id ,
+      author: req.user._id,
     });
 
     res.status(201).json({
@@ -64,7 +65,7 @@ const createNews = async (req, res) => {
 const getAllNews = async (req, res) => {
   try {
     const page = Number(req.query.page) || 1;
-    const limit = Number(req.query.limit) || 100;
+    const limit = Number(req.query.limit) || 200;
     const skip = (page - 1) * limit;
 
     const { search, category, tag, status } = req.query;
@@ -79,8 +80,47 @@ const getAllNews = async (req, res) => {
       ];
     }
 
-    if (category) query.category = category;
-    if (tag) query.tags = tag;
+    // ✅ CATEGORY: ID OR NAME OR SLUG
+    if (category) {
+      // If ObjectId
+      if (mongoose.Types.ObjectId.isValid(category)) {
+        query.category = category;
+      }
+      // If slug or name
+      else {
+        const cat = await Category.findOne({
+          $or: [{ slug: category }, { name: category }],
+        });
+
+        if (!cat) {
+          return res.status(404).json({
+            success: false,
+            message: "Category not found",
+          });
+        }
+
+        query.category = cat._id;
+      }
+    }
+
+    if (tag) {
+      if (mongoose.Types.ObjectId.isValid(tag)) {
+        query.tags = tag;
+      } else {
+        const tagDoc = await Tag.findOne({
+          $or: [{ slug: tag }, { name: tag }],
+        });
+
+        if (!tagDoc) {
+          return res.status(404).json({
+            success: false,
+            message: "Tag not found",
+          });
+        }
+
+        query.tags = tagDoc._id;
+      }
+    }
 
     const total = await News.countDocuments(query);
 
@@ -194,7 +234,10 @@ const updateNews = async (req, res) => {
       });
     }
 
-    if (req.user.role === "author" && news.author.toString() !== req.user._id.toString()) {
+    if (
+      req.user.role === "author" &&
+      news.author.toString() !== req.user._id.toString()
+    ) {
       return res.status(403).json({
         success: false,
         message: "You can update only your own news",
