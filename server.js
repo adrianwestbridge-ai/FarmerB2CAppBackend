@@ -20,22 +20,15 @@ connectDB();
 //Middlewares
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-const allowedOrigins = [
-  process.env.FRONTEND_URL,
-  process.env.SECONDARY_URL,
-].filter(Boolean);
+const allowedOrigins = [process.env.FRONTEND_URL, process.env.SECONDARY_URL].filter(Boolean);
 
 app.use(
   cors({
-    origin: (origin, callback) => {
-      // allow server-to-server & Postman
-      if (!origin) return callback(null, true);
-
-      if (allowedOrigins.includes(origin)) {
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
-        callback(null, false); // ❌ don't throw error
+        callback(new Error("Not allowed by CORS"));
       }
     },
     credentials: true,
@@ -43,8 +36,7 @@ app.use(
 );
 
 
-app.set("trust proxy", 1); // REQUIRED for Vercel
-
+// Session (required for passport-google-oauth)
 app.use(
   session({
     secret: process.env.SESSION_SECRET,
@@ -52,9 +44,9 @@ app.use(
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      secure: true,        // ✅ HTTPS only
-      sameSite: "none",    // ✅ cross-domain
-      maxAge: 1000 * 60 * 60 * 24,
+      secure: false, // true only in HTTPS
+      maxAge: 1000 * 60 * 60 * 24, // 1 day
+      sameSite: "lax",//diffrent front and backend
     },
   })
 );
