@@ -65,7 +65,7 @@ const createNews = async (req, res) => {
 const getAllNews = async (req, res) => {
   try {
     const page = Number(req.query.page) || 1;
-    const limit = Number(req.query.limit) || 100;
+    const limit = Number(req.query.limit) || 1000;
     const skip = (page - 1) * limit;
 
     const { search, category, tag, status } = req.query;
