@@ -20,7 +20,7 @@ connectDB();
 //Middlewares
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-const allowedOrigins = [process.env.FRONTEND_URL, process.env.SECONDARY_URL].filter(Boolean);
+const allowedOrigins = [process.env.FRONTEND_URL, process.env.SECONDARY_URL, process.env.Third_URL].filter(Boolean);
 
 app.use(
   cors({
