@@ -22,7 +22,7 @@ app.use(express.urlencoded({ extended: true }));
 const allowedOrigins = [
   process.env.FRONTEND_URL,
   process.env.SECONDARY_URL,
-  process.env.Third_URL,
+  process.env.THIRD_URL,
 ].filter(Boolean);
 
 app.use(
