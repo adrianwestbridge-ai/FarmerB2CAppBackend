@@ -19,7 +19,11 @@ connectDB();
 //Middlewares
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-const allowedOrigins = [process.env.FRONTEND_URL, process.env.SECONDARY_URL, process.env.Third_URL].filter(Boolean);
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  process.env.SECONDARY_URL,
+  process.env.Third_URL,
+].filter(Boolean);
 
 app.use(
   cors({
@@ -31,9 +35,8 @@ app.use(
       }
     },
     credentials: true,
-  })
+  }),
 );
-
 
 // Session (required for passport-google-oauth)
 app.use(
@@ -45,11 +48,10 @@ app.use(
       httpOnly: true,
       secure: false, // true only in HTTPS
       maxAge: 1000 * 60 * 60 * 24, // 1 day
-      sameSite: "lax",//diffrent front and backend
+      sameSite: "lax", //diffrent front and backend
     },
-  })
+  }),
 );
-
 
 // Passport
 app.use(passport.initialize());
@@ -58,16 +60,40 @@ app.use(passport.session());
 // Routes
 app.use("/auth", authRoutes);
 app.use("/api/categories", categoryRoutes);
-app.use("/api/news",newsRoutes );
+app.use("/api/news", newsRoutes);
 app.use("/api/tags", tagRoutes);
 app.use("/api/users", userRoutes);
 
 app.get("/api/cron", async (req, res) => {
-  if (req.query.secret !== process.env.CRON_SECRET) {
-    return res.status(403).json({ error: "Unauthorized" });
-  }
+  try {
+    if (req.query.secret !== process.env.CRON_SECRET) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
 
-  console.log("success")
+    // your logic
+    console.log("Cron job triggered");
+
+    // Example MongoDB query
+    // const result = await News.updateMany(
+    //   {
+    //     isPublished: false,
+    //     publishAt: { $lte: new Date() }
+    //   },
+    //   {
+    //     $set: { isPublished: true }
+    //   }
+    // );
+
+    // console.log("Updated:", result.modifiedCount);
+
+    res.status(200).json({
+      success: true,
+      // updated: result.modifiedCount
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Cron failed" });
+  }
 });
 
 app.get("/", (req, res) => {
