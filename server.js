@@ -63,31 +63,11 @@ app.use("/api/tags", tagRoutes);
 app.use("/api/users", userRoutes);
 
 app.get("/api/cron", async (req, res) => {
-  try {
-    console.log("Cron job triggered");
-
-    // Example MongoDB query
-    // const result = await News.updateMany(
-    //   {
-    //     isPublished: false,
-    //     publishAt: { $lte: new Date() }
-    //   },
-    //   {
-    //     $set: { isPublished: true }
-    //   }
-    // );
-
-    // console.log("Updated:", result.modifiedCount);
-
-    res.status(200).json({
-      success: true,
-      // updated: result.modifiedCount
-    });
-
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Cron failed" });
+  if (req.query.secret !== process.env.CRON_SECRET) {
+    return res.status(403).json({ error: "Unauthorized" });
   }
+
+  console.log("success")
 });
 
 app.get("/", (req, res) => {
