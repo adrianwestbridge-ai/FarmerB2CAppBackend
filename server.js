@@ -68,19 +68,6 @@ app.get("/", (req, res) => {
 });
 ;
 
-app.get("/api/cron", async (req, res) => {
-  try {
-    console.log("Cron hit Express at:", new Date().toISOString());
-    res.status(200).json({ success: true });
-  } catch (err) {
-    console.error("Cron Error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ✅ ADD THIS
-module.exports = app;
-
 // app.listen(port, () => {
 //   console.log(`Server started on PORT : ${port}`);
 // });
