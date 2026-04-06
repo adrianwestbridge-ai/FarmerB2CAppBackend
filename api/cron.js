@@ -1,14 +1,14 @@
-module.exports = async function (req, res) {
+module.exports = async (req, res) => {
   try {
-    console.log("Cron job triggered at:", new Date().toISOString());
+    console.log("Cron triggered at:", new Date().toISOString());
 
-    // ✅ Your DB logic here
+    // ✅ Your MongoDB logic here
     // await connectDB();
     // await User.updateMany(...);
 
-    return res.status(200).json({ success: true });
+    res.status(200).json({ success: true });
   } catch (err) {
     console.error("Cron Error:", err);
-    return res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 };
