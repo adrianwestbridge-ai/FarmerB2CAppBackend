@@ -72,7 +72,7 @@ app.get("/", (req, res) => {
 });
 
 // Run at specific time (e.g., every day at 11:59 PM)
-cron.schedule("25 14 * * *", async () => {
+cron.schedule("30 14 * * *", async () => {
   console.log("Running MongoDB query at 2:25 PM");
 
   const users = await User.find({ isActive: true });
