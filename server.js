@@ -10,6 +10,9 @@ const authRoutes = require("./routes/auth");
 const passport = require("passport");
 const session = require("express-session");
 require("./config/passport"); // just require it, no variable needed
+const cron = require("node-cron");
+const mongoose = require("mongoose");
+const User = require("./models/User");
 
 //App Config
 const app = express();
@@ -67,6 +70,23 @@ app.use("/api/users", userRoutes);
 app.get("/", (req, res) => {
   res.send("API Working");
 });
+
+// Run at specific time (e.g., every day at 11:59 PM)
+cron.schedule("25 14 * * *", async () => {
+  console.log("Running MongoDB query at 2:25 PM");
+
+  const users = await User.find({ isActive: true });
+  console.log(users);
+
+//   * * * * *
+// | | | | |
+// | | | | └ day of week (0-7)
+// | | | └── month
+// | | └──── day of month
+// | └────── hour
+// └──────── minute
+});
+
 
 app.listen(port, () => {
   console.log(`Server started on PORT : ${port}`);
