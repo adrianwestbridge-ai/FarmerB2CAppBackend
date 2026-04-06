@@ -67,7 +67,20 @@ app.get("/", (req, res) => {
   res.send("API Working");
 });
 ;
+app.get("/api/cron", async (req, res) => {
+  try {
+    console.log("Cron hit Express at:", new Date().toISOString());
 
+    // ✅ Your MongoDB logic here
+    // await connectDB();
+    // const users = await User.find({ isActive: true });
+
+    res.status(200).json({ success: true });
+  } catch (err) {
+    console.error("Cron Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 app.listen(port, () => {
   console.log(`Server started on PORT : ${port}`);
 });
