@@ -81,6 +81,9 @@ app.get("/api/cron", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-app.listen(port, () => {
-  console.log(`Server started on PORT : ${port}`);
-});
+
+module.exports = app;
+
+// app.listen(port, () => {
+//   console.log(`Server started on PORT : ${port}`);
+// });
