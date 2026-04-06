@@ -77,11 +77,11 @@ app.get("/api/cron", async (req, res) => {
     //   }
     // );
 
-    console.log("Updated:", result.modifiedCount);
+    // console.log("Updated:", result.modifiedCount);
 
     res.status(200).json({
       success: true,
-      updated: result.modifiedCount
+      // updated: result.modifiedCount
     });
 
   } catch (error) {
