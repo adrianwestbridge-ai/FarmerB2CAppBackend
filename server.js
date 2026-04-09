@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 require("dotenv").config(); // instead of import "dotenv/config"
 const connectDB = require("./config/mongodb");
+const { textModel, embeddingModel } = require("./config/gemini");
 const newsRoutes = require("./routes/newsRoutes.js");
 const categoryRoutes = require("./routes/categoryRoutes.js");
 const tagRoutes = require("./routes/tagRoutes.js");
@@ -64,6 +65,85 @@ app.use("/api/news", newsRoutes);
 app.use("/api/tags", tagRoutes);
 app.use("/api/users", userRoutes);
 
+app.get("/api/cron", async (req, res) => {
+  try {
+    if (req.query.secret !== process.env.CRON_SECRET) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    console.log("🔥 Cron job triggered");
+
+    const prompt = `
+    Generate 5 latest tech news articles in JSON array format.
+
+    Each object must contain:
+    title, slug, summary, content (HTML), image, category, tags
+
+    IMPORTANT:
+    - Return ONLY valid JSON
+    - No markdown
+    - No extra text
+    `;
+
+    const result = await textModel.generateContent(prompt);
+    let text = result.response.text();
+
+    // ✅ Fix Gemini JSON issue (remove ```json blocks)
+    text = text.replace(/```json|```/g, "").trim();
+
+    const articles = JSON.parse(text);
+
+    const savedDocs = [];
+
+    for (let article of articles) {
+      // 🔥 Create embedding
+      const embeddingRes = await embeddingModel.embedContent({
+        content: {
+          parts: [{ text: article.title + " " + article.summary }],
+        },
+      });
+
+      const embedding = embeddingRes.embedding.values;
+
+      console.log(article);
+
+      // const doc = await News.create({
+      //   title: article.title,
+      //   slug: article.slug,
+      //   summary: article.summary,
+      //   content: article.content,
+      //   image: article.image,
+
+      //   category: new mongoose.Types.ObjectId("64f000000000000000000001"),
+      //   author: new mongoose.Types.ObjectId("64f000000000000000000002"),
+
+      //   tags: article.tags || ["Tech"],
+
+      //   status: "published",
+      //   isBreaking: true,
+
+      //   embedding: embedding,
+
+      //   publishedAt: new Date(),
+      // });
+
+      // savedDocs.push(doc);
+    }
+
+    res.status(200).json({
+      success: true,
+      // count: savedDocs.length,
+      // data: savedDocs,
+    });
+  } catch (error) {
+    console.error("❌ Cron Error:", error.message);
+
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
 // app.get("/api/cron", async (req, res) => {
 //    try {
 //     if (req.query.secret !== process.env.CRON_SECRET) {
