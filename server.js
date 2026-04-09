@@ -2,7 +2,6 @@ const express = require("express");
 const cors = require("cors");
 require("dotenv").config(); // instead of import "dotenv/config"
 const connectDB = require("./config/mongodb");
-const { textModel, embeddingModel } = require("./config/gemini");
 const newsRoutes = require("./routes/newsRoutes.js");
 const categoryRoutes = require("./routes/categoryRoutes.js");
 const tagRoutes = require("./routes/tagRoutes.js");
@@ -66,169 +65,91 @@ app.use("/api/tags", tagRoutes);
 app.use("/api/users", userRoutes);
 
 app.get("/api/cron", async (req, res) => {
-  try {
-    if (req.query.secret !== process.env.CRON_SECRET) {
-      return res.status(403).json({ error: "Unauthorized" });
-    }
+  //  try {
+  //   if (req.query.secret !== process.env.CRON_SECRET) {
+  //     return res.status(403).json({ error: "Unauthorized" });
+  //   }
 
-    console.log("🔥 Cron job triggered");
+  //   console.log("Cron job triggered");
 
-    const prompt = `
-    Generate 5 latest tech news articles in JSON array format.
+  //   const model = genAI.getGenerativeModel({
+  //     model: "gemini-1.5-flash"
+  //   });
 
-    Each object must contain:
-    title, slug, summary, content (HTML), image, category, tags
+  //   const embeddingModel = genAI.getGenerativeModel({
+  //     model: "text-embedding-004"
+  //   });
 
-    IMPORTANT:
-    - Return ONLY valid JSON
-    - No markdown
-    - No extra text
-    `;
+  //   // 👉 Prompt to generate 5 news articles
+  //   const prompt = `
+  //   Generate 5 latest tech news articles in JSON format.
+  //   Each article must include:
+  //   title, slug, summary, content (HTML), image URL, category, tags.
 
-    const result = await textModel.generateContent(prompt);
-    let text = result.response.text();
+  //   Keep it realistic like tech news website.
+  //   `;
 
-    // ✅ Fix Gemini JSON issue (remove ```json blocks)
-    text = text.replace(/```json|```/g, "").trim();
+  //   const result = await model.generateContent(prompt);
+  //   const text = result.response.text();
 
-    const articles = JSON.parse(text);
+  //   const articles = JSON.parse(text); // Ensure Gemini returns valid JSON
 
-    const savedDocs = [];
+  //   const savedDocs = [];
 
-    for (let article of articles) {
-      // 🔥 Create embedding
-      const embeddingRes = await embeddingModel.embedContent({
-        content: {
-          parts: [{ text: article.title + " " + article.summary }],
-        },
-      });
+  //   for (let article of articles) {
+  //     // 👉 Create embedding from title + summary
+  //     const embeddingRes = await embeddingModel.embedContent({
+  //       content: {
+  //         parts: [
+  //           { text: article.title + " " + article.summary }
+  //         ]
+  //       }
+  //     });
 
-      const embedding = embeddingRes.embedding.values;
+  //     const embedding = embeddingRes.embedding.values;
 
-      console.log(article);
+  //     Console.log(article)
 
-      // const doc = await News.create({
-      //   title: article.title,
-      //   slug: article.slug,
-      //   summary: article.summary,
-      //   content: article.content,
-      //   image: article.image,
+  //     // const doc = await News.create({
+  //     //   title: article.title,
+  //     //   slug: article.slug,
+  //     //   summary: article.summary,
+  //     //   content: article.content,
+  //     //   image: article.image,
 
-      //   category: new mongoose.Types.ObjectId("64f000000000000000000001"),
-      //   author: new mongoose.Types.ObjectId("64f000000000000000000002"),
+  //     //   // 👉 Use your existing category + author IDs
+  //     //   category: new mongoose.Types.ObjectId("69763d68c2960c8d8f5323f8"), // Gadgets :contentReference[oaicite:0]{index=0}
+  //     //   author: new mongoose.Types.ObjectId("69763dc1c2960c8d8f532403"),   // Admin :contentReference[oaicite:1]{index=1}
 
-      //   tags: article.tags || ["Tech"],
+  //     //   tags: ["AI"],
 
-      //   status: "published",
-      //   isBreaking: true,
+  //     //   status: "published",
+  //     //   isBreaking: true,
 
-      //   embedding: embedding,
+  //     //   embedding: embedding, // 🔥 IMPORTANT
 
-      //   publishedAt: new Date(),
-      // });
+  //     //   views: 0,
+  //     //   likesCount: 0,
+  //     //   commentsCount: 0,
+  //     //   publishedAt: new Date()
+  //     // });
 
-      // savedDocs.push(doc);
-    }
+  //     // savedDocs.push(doc);
 
-    res.status(200).json({
-      success: true,
-      // count: savedDocs.length,
-      // data: savedDocs,
-    });
-  } catch (error) {
-    console.error("❌ Cron Error:", error.message);
+  //   }
 
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
-  }
+  //   res.status(200).json({
+  //     success: true,
+  //     // count: savedDocs.length,
+  //     // data: savedDocs
+  //   });
+
+  // }
+  //  catch (error) {
+  //   console.error(error);
+  //   res.status(500).json({ error: "Cron failed" });
+  // }
 });
-// app.get("/api/cron", async (req, res) => {
-//    try {
-//     if (req.query.secret !== process.env.CRON_SECRET) {
-//       return res.status(403).json({ error: "Unauthorized" });
-//     }
-
-//     console.log("Cron job triggered");
-
-//     const model = genAI.getGenerativeModel({
-//       model: "gemini-1.5-flash"
-//     });
-
-//     const embeddingModel = genAI.getGenerativeModel({
-//       model: "text-embedding-004"
-//     });
-
-//     // 👉 Prompt to generate 5 news articles
-//     const prompt = `
-//     Generate 5 latest tech news articles in JSON format.
-//     Each article must include:
-//     title, slug, summary, content (HTML), image URL, category, tags.
-
-//     Keep it realistic like tech news website.
-//     `;
-
-//     const result = await model.generateContent(prompt);
-//     const text = result.response.text();
-
-//     const articles = JSON.parse(text); // Ensure Gemini returns valid JSON
-
-//     const savedDocs = [];
-
-//     for (let article of articles) {
-//       // 👉 Create embedding from title + summary
-//       const embeddingRes = await embeddingModel.embedContent({
-//         content: {
-//           parts: [
-//             { text: article.title + " " + article.summary }
-//           ]
-//         }
-//       });
-
-//       const embedding = embeddingRes.embedding.values;
-
-//       Console.log(article)
-
-//       // const doc = await News.create({
-//       //   title: article.title,
-//       //   slug: article.slug,
-//       //   summary: article.summary,
-//       //   content: article.content,
-//       //   image: article.image,
-
-//       //   // 👉 Use your existing category + author IDs
-//       //   category: new mongoose.Types.ObjectId("69763d68c2960c8d8f5323f8"), // Gadgets :contentReference[oaicite:0]{index=0}
-//       //   author: new mongoose.Types.ObjectId("69763dc1c2960c8d8f532403"),   // Admin :contentReference[oaicite:1]{index=1}
-
-//       //   tags: ["AI"],
-
-//       //   status: "published",
-//       //   isBreaking: true,
-
-//       //   embedding: embedding, // 🔥 IMPORTANT
-
-//       //   views: 0,
-//       //   likesCount: 0,
-//       //   commentsCount: 0,
-//       //   publishedAt: new Date()
-//       // });
-
-//       // savedDocs.push(doc);
-
-//     }
-
-//     res.status(200).json({
-//       success: true,
-//       // count: savedDocs.length,
-//       // data: savedDocs
-//     });
-
-//   } catch (error) {
-//     console.error(error);
-//     res.status(500).json({ error: "Cron failed" });
-//   }
-// });
 
 app.get("/", (req, res) => {
   res.send("API Working");
