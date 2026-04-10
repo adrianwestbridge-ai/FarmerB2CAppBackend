@@ -16,7 +16,7 @@ exports.getEventsByMonth = async (req, res) => {
 exports.getTodayEvent = async (req, res) => {
     try {
         const now = new Date();
-        const currentMonth = now.getMonth() + 1;
+        const currentMonth = now.getMonth();
         const currentDay = now.getDate();
 
         const event = await Calendar.findOne({ month: currentMonth, day: currentDay });
