@@ -103,7 +103,7 @@ app.get("/api/cron", async (req, res) => {
     const tagNames = tags.map(t => t.name).join(", ");
 
     // 3. Initialize Gemini
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 
     // 4. Prompt to generate 5 news articles
     const prompt = `
