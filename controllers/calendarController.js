@@ -20,7 +20,7 @@ exports.getTodayEvent = async (req, res) => {
         const currentDay = now.getDate();
 
         const event = await Calendar.findOne({ month: currentMonth, day: currentDay });
-        if (!event) return res.status(404).json({ message: "No special event today." });
+        if (!event) return res.status(404).json({ message: "No special event today." ,date:now});
 
         res.status(200).json(event);
     } catch (error) {
