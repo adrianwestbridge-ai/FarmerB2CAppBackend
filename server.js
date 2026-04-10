@@ -4,6 +4,7 @@ require("dotenv").config(); // instead of import "dotenv/config"
 const connectDB = require("./config/mongodb");
 const newsRoutes = require("./routes/newsRoutes.js");
 const categoryRoutes = require("./routes/categoryRoutes.js");
+const calendarRoutes = require('./routes/calendarRoutes');
 const tagRoutes = require("./routes/tagRoutes.js");
 const userRoutes = require("./routes/usersRoutes");
 const authRoutes = require("./routes/auth");
@@ -63,6 +64,7 @@ app.use("/api/categories", categoryRoutes);
 app.use("/api/news", newsRoutes);
 app.use("/api/tags", tagRoutes);
 app.use("/api/users", userRoutes);
+app.use('/api/calendar', calendarRoutes);
 
 app.get("/api/cron", async (req, res) => {
   //  try {
