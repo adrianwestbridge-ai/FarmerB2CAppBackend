@@ -96,7 +96,7 @@ const CalendarSchema = new mongoose.Schema({
 });
 
 // Indexes for faster filtering in your API
-// CalendarEventSchema.index({ month: 1, day: 1 });
-// CalendarEventSchema.index({ category: 1 });
+CalendarSchema.index({ month: 1, day: 1 });
+CalendarSchema.index({ category: 1 });
 
 module.exports = mongoose.model('Calendar', CalendarSchema);
