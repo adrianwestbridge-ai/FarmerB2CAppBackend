@@ -4,7 +4,7 @@ require("dotenv").config(); // instead of import "dotenv/config"
 const connectDB = require("./config/mongodb");
 const newsRoutes = require("./routes/newsRoutes.js");
 const categoryRoutes = require("./routes/categoryRoutes.js");
-const calendarRoutes = require('./routes/calendarRoutes');
+const calendarRoutes = require("./routes/calendarRoutes");
 const tagRoutes = require("./routes/tagRoutes.js");
 const userRoutes = require("./routes/usersRoutes");
 const authRoutes = require("./routes/auth");
@@ -24,7 +24,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 //App Config
 const app = express();
 const port = process.env.PORT || 4000;
-connectDB().catch(err => {
+connectDB().catch((err) => {
   console.error("Database connection failed during startup:", err.message);
 });
 
@@ -75,7 +75,7 @@ app.use("/api/categories", categoryRoutes);
 app.use("/api/news", newsRoutes);
 app.use("/api/tags", tagRoutes);
 app.use("/api/users", userRoutes);
-app.use('/api/calendar', calendarRoutes);
+app.use("/api/calendar", calendarRoutes);
 
 app.get("/api/cron", async (req, res) => {
   try {
@@ -99,8 +99,8 @@ app.get("/api/cron", async (req, res) => {
       return res.status(500).json({ error: "No categories found" });
     }
 
-    const categoryNames = categories.map(c => c.name).join(", ");
-    const tagNames = tags.map(t => t.name).join(", ");
+    const categoryNames = categories.map((c) => c.name).join(", ");
+    const tagNames = tags.map((t) => t.name).join(", ");
 
     // 3. Initialize Gemini
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
@@ -109,6 +109,18 @@ app.get("/api/cron", async (req, res) => {
     const prompt = `
     Generate 5 latest tech news articles in JSON format.
     Return ONLY a JSON array of objects.
+    Avoid repeating previous topics.
+
+    Current time: ${new Date().toISOString()}
+
+Focus on:
+- Tech
+- AI
+- Startups
+- Gadgets
+- Cybersecurity
+- Trending technologies
+
     Each object MUST have:
     - title: string
     - summary: string (max 500 chars)
@@ -134,7 +146,7 @@ app.get("/api/cron", async (req, res) => {
     const result = await model.generateContent(prompt);
     const response = await result.response;
     let text = response.text();
-    
+
     // Clean up text if Gemini adds markdown code blocks
     text = text.replace(/```json|```/g, "").trim();
 
@@ -150,12 +162,14 @@ app.get("/api/cron", async (req, res) => {
 
     for (const articleData of articles) {
       // Find Category ID
-      const category = categories.find(c => c.name === articleData.categoryName) || categories[0];
-      
+      const category =
+        categories.find((c) => c.name === articleData.categoryName) ||
+        categories[0];
+
       // Find Tag IDs
       const tagIds = (articleData.tagNames || [])
-        .map(tn => tags.find(t => t.name === tn)?._id)
-        .filter(id => id);
+        .map((tn) => tags.find((t) => t.name === tn)?._id)
+        .filter((id) => id);
 
       // Generate UNIQUE Slug
       let slug = slugify(articleData.title, { lower: true, strict: true });
@@ -178,7 +192,7 @@ app.get("/api/cron", async (req, res) => {
         publishedAt: new Date(),
         views: 0,
         likesCount: 0,
-        commentsCount: 0
+        commentsCount: 0,
       });
 
       await newsDoc.save();
@@ -188,12 +202,13 @@ app.get("/api/cron", async (req, res) => {
     res.status(200).json({
       success: true,
       count: savedDocs.length,
-      message: "News generated and saved successfully"
+      message: "News generated and saved successfully",
     });
-
   } catch (error) {
     console.error("Cron Error:", error);
-    res.status(500).json({ error: "Cron execution failed", details: error.message });
+    res
+      .status(500)
+      .json({ error: "Cron execution failed", details: error.message });
   }
 });
 
