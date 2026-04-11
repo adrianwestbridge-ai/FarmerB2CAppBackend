@@ -53,8 +53,8 @@ const newsSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["draft", "published", "archived"],
-      default: "published",
+      enum: ["draft","pending","published", "archived"],
+      default: "pending",
       index: true,
     },
 
