@@ -19,7 +19,7 @@ exports.getTodayEvent = async (req, res) => {
         const indianDate = now.toLocaleString("en-US", {timeZone: "Asia/Kolkata"});
         const dateObj = new Date(indianDate);
         const currentMonth = now.getMonth()+1;
-        const currentDay = now.getDate();
+        const currentDay = now.getDate()+1;
 
         const event = await Calendar.findOne({ month: currentMonth, day: currentDay });
         if (!event) return res.status(404).json({ message: "No special event today." ,date:indianDate});
