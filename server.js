@@ -112,6 +112,7 @@ app.get("/api/cron", async (req, res) => {
     Avoid repeating previous topics.
 
     Current time: ${new Date().toISOString()}
+    BASED ON INDIAN HEADLINES
 
 Focus on:
 -Tech
