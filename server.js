@@ -114,7 +114,16 @@ app.get("/api/cron", async (req, res) => {
     Current time: ${new Date().toISOString()}
 
 Focus on:
-- Tech
+-Tech
+-Jobs
+-India
+-World
+-Sport
+-Data
+-Health
+-Opinion
+-Science
+-Business
 - AI
 - Startups
 - Gadgets
