@@ -71,7 +71,12 @@ const getAllNews = async (req, res) => {
     const { search, category, tag, status } = req.query;
 
     const query = {};
-    query.status = status || "published";
+    if (status) {
+      const statusArray = status.split(",");
+      query.status = { $in: statusArray };
+    } else {
+      query.status = "published";
+    }
 
     if (search) {
       query.$or = [
