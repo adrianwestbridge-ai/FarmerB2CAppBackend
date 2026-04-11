@@ -197,7 +197,7 @@ Focus on:
         category: category._id,
         tags: tagIds,
         author: adminUser._id,
-        status: "published",
+        status: "pending",
         isBreaking: Math.random() > 0.8, // 20% chance to be breaking news
         publishedAt: new Date(),
         views: 0,
