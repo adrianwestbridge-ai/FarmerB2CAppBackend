@@ -47,6 +47,7 @@ const allowedOrigins = [
   process.env.FRONTEND_URL,
   process.env.SECONDARY_URL,
   process.env.THIRD_URL,
+  process.env.FORTH_URL,
 ].filter(Boolean);
 
 app.use(
