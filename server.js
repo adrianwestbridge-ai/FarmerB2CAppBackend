@@ -24,9 +24,21 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 //App Config
 const app = express();
 const port = process.env.PORT || 4000;
-connectDB().catch((err) => {
-  console.error("Database connection failed during startup:", err.message);
-});
+
+const startServer = async () => {
+  try {
+    await connectDB(); // ✅ WAIT for DB
+
+    app.listen(port, () => {
+      console.log(`🚀 Server started on PORT: ${port}`);
+    });
+  } catch (err) {
+    console.error("❌ Failed to start server:", err.message);
+    process.exit(1); // stop app if DB fails
+  }
+};
+
+startServer();
 
 //Middlewares
 app.use(express.json());
