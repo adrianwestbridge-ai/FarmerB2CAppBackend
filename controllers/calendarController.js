@@ -18,7 +18,7 @@ exports.getTodayEvent = async (req, res) => {
         const now = new Date();
         const indianDate = now.toLocaleString("en-US", {timeZone: "Asia/Kolkata"});
         const dateObj = new Date(indianDate);
-        const currentMonth = now.getMonth();
+        const currentMonth = now.getMonth()+1;
         const currentDay = now.getDate();
 
         const event = await Calendar.findOne({ month: currentMonth, day: currentDay });
