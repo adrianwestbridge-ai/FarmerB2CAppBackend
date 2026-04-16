@@ -5,8 +5,7 @@ const jwt = require("jsonwebtoken");
 const JWT_SECRET = process.env.JWT_SECRET;
 
 // ---------------- HELPERS ----------------
-const isValidEmail = (email) =>
-  /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
 const isStrongPassword = (password) =>
   /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[\W_]).{8,}$/.test(password);
@@ -14,10 +13,12 @@ const isStrongPassword = (password) =>
 // ---------------- AUTH ----------------
 const registerUser = async (req, res) => {
   try {
-    const { name, email, password,avatar,bio } = req.body;
+    const { name, email, password, avatar, bio } = req.body;
 
     if (!name || !email || !password)
-      return res.status(400).json({ success: false, message: "All fields required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "All fields required" });
 
     if (!isValidEmail(email) || !isStrongPassword(password))
       return res.status(400).json({ success: false, message: "Invalid input" });
@@ -48,15 +49,13 @@ const registerUser = async (req, res) => {
       email,
       password: hashedPassword,
       role: "user",
-      avatar:avatar||"",
-      bio: bio||""
+      avatar: avatar || "",
+      bio: bio || "",
     });
 
-    const token = jwt.sign(
-      { id: user._id, role: user.role },
-      JWT_SECRET,
-      { expiresIn: "1d" }
-    );
+    const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, {
+      expiresIn: "1d",
+    });
 
     res.status(201).json({ success: true, token });
   } catch (err) {
@@ -107,7 +106,7 @@ const loginUser = async (req, res) => {
     const token = jwt.sign(
       { id: user._id, role: user.role },
       process.env.JWT_SECRET,
-      { expiresIn: "1d" }
+      { expiresIn: "1d" },
     );
 
     res.json({
@@ -123,13 +122,14 @@ const loginUser = async (req, res) => {
   }
 };
 
-
 // ---------------- ADMIN LOGIN ----------------
 const adminLogin = async (req, res) => {
   try {
     const { email, password } = req.body;
-
-    const admin = await User.findOne({ email, role: "admin" }).select("+password");
+    const admin = await User.findOne({
+      email,
+      role: { $in: ["admin", "editor"] },
+    }).select("+password");
 
     if (!admin) {
       return res.status(401).json({
@@ -150,7 +150,7 @@ const adminLogin = async (req, res) => {
     const token = jwt.sign(
       { id: admin._id, role: admin.role },
       process.env.JWT_SECRET,
-      { expiresIn: "1d" }
+      { expiresIn: "7d" },
     );
 
     res.json({
@@ -165,7 +165,6 @@ const adminLogin = async (req, res) => {
     });
   }
 };
-
 
 // ---------------- ADMIN USERS ----------------
 const createUser = async (req, res) => {
@@ -190,16 +189,15 @@ const getAllUsers = async (req, res) => {
 
 const getUserById = async (req, res) => {
   const user = await User.findById(req.params.id).select("-password");
-  if (!user) return res.status(404).json({ success: false, message: "User not found" });
+  if (!user)
+    return res.status(404).json({ success: false, message: "User not found" });
   res.json({ success: true, data: user });
 };
 
 const updateUser = async (req, res) => {
-  const user = await User.findByIdAndUpdate(
-    req.params.id,
-    req.body,
-    { new: true }
-  ).select("-password");
+  const user = await User.findByIdAndUpdate(req.params.id, req.body, {
+    new: true,
+  }).select("-password");
 
   res.json({ success: true, data: user });
 };
@@ -208,7 +206,7 @@ const blockUser = async (req, res) => {
   const user = await User.findByIdAndUpdate(
     req.params.id,
     { status: "blocked" },
-    { new: true }
+    { new: true },
   );
   res.json({ success: true, message: "User blocked" });
 };
@@ -217,7 +215,7 @@ const unblockUser = async (req, res) => {
   const user = await User.findByIdAndUpdate(
     req.params.id,
     { status: "active" },
-    { new: true }
+    { new: true },
   );
   res.json({ success: true, message: "User unblocked" });
 };
