@@ -95,7 +95,7 @@ const getAllNews = async (req, res) => {
       else {
         const cat = await Category.findOne({
           $or: [{ slug: category }, { name: category }],
-        });
+        }).lean();
 
         if (!cat) {
           return res.status(404).json({
@@ -114,7 +114,7 @@ const getAllNews = async (req, res) => {
       } else {
         const tagDoc = await Tag.findOne({
           $or: [{ slug: tag }, { name: tag }],
-        });
+        }).lean();
 
         if (!tagDoc) {
           return res.status(404).json({
@@ -135,7 +135,8 @@ const getAllNews = async (req, res) => {
       .populate("author", "name avatar")
       .sort({ publishedAt: -1, createdAt: -1 })
       .skip(skip)
-      .limit(limit);
+      .limit(limit)
+      .lean();
 
     res.status(200).json({
       success: true,
@@ -163,7 +164,8 @@ const getSingleNews = async (req, res) => {
     const news = await News.findById(req.params.id)
       .populate("category", "name slug")
       .populate("tags", "name slug")
-      .populate("author", "name avatar");
+      .populate("author", "name avatar")
+      .lean();
 
     if (!news) {
       return res.status(404).json({
@@ -192,13 +194,15 @@ const getSingleNews = async (req, res) => {
  */
 const getNewsBySlug = async (req, res) => {
   try {
-    const news = await News.findOne({
-      slug: req.params.slug,
-      status: "published",
-    })
+    const news = await News.findOneAndUpdate(
+      { slug: req.params.slug, status: "published" },
+      { $inc: { views: 1 } },
+      { new: true }
+    )
       .populate("category", "name slug")
       .populate("tags", "name slug")
-      .populate("author", "name avatar");
+      .populate("author", "name avatar")
+      .lean();
 
     if (!news) {
       return res.status(404).json({
@@ -206,9 +210,6 @@ const getNewsBySlug = async (req, res) => {
         message: "News not found",
       });
     }
-
-    news.views += 1;
-    await news.save();
 
     res.status(200).json({
       success: true,
