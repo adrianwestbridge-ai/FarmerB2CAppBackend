@@ -25,15 +25,20 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const app = express();
 const port = process.env.PORT || 4000;
 
-// Initialize Database Connection
-connectDB();
+const startServer = async () => {
+  try {
+    await connectDB(); // ✅ WAIT for DB
 
-// Only listen locally. Vercel will use the exported app.
-if (process.env.NODE_ENV !== "production") {
-  app.listen(port, () => {
-    console.log(`🚀 Server started on PORT: ${port}`);
-  });
-}
+    app.listen(port, () => {
+      console.log(`🚀 Server started on PORT: ${port}`);
+    });
+  } catch (err) {
+    console.error("❌ Failed to start server:", err.message);
+    process.exit(1); // stop app if DB fails
+  }
+};
+
+startServer();
 
 //Middlewares
 app.use(express.json());
@@ -52,8 +57,7 @@ app.use(
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
-        console.warn(`CORS blocked request from origin: ${origin}`);
-        callback(null, false);
+        callback(new Error("Not allowed by CORS"));
       }
     },
     credentials: true,
@@ -236,5 +240,6 @@ app.get("/", (req, res) => {
   res.send("API Working");
 });
 
-// Export app for Vercel Serverless
-module.exports = app;
+app.listen(port, () => {
+  console.log(`Server started on PORT : ${port}`);
+});
