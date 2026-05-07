@@ -3,11 +3,18 @@ const dns = require("dns");
 
 dns.setServers(["8.8.8.8", "8.8.4.4"]);
 
-let isConnected = false;
+let cached = global.mongoose;
+
+if (!cached) {
+  cached = global.mongoose = {
+    conn: null,
+    promise: null,
+  };
+}
 
 const connectDB = async () => {
-  if (isConnected) {
-    return;
+  if (cached.conn) {
+    return cached.conn;
   }
 
   try {
@@ -23,15 +30,30 @@ const connectDB = async () => {
       console.log("⚠️ MongoDB Disconnected");
     });
 
-    await mongoose.connect(process.env.MONGODB_URI, {
-      dbName: "thetechtimes",
-      family: 4,
-    });
+    if (!cached.promise) {
+      cached.promise = mongoose.connect(process.env.MONGODB_URI, {
+        dbName: "thetechtimes",
 
-    isConnected = true;
+        family: 4,
+
+        maxPoolSize: 10,
+        minPoolSize: 5,
+
+        serverSelectionTimeoutMS: 5000,
+        socketTimeoutMS: 45000,
+      });
+    }
+
+    cached.conn = await cached.promise;
+
+    return cached.conn;
 
   } catch (error) {
+    cached.promise = null;
+
     console.log("❌ Connection Failed:", error.message);
+
+    throw error;
   }
 };
 
