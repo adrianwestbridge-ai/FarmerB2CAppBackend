@@ -40,6 +40,8 @@ const limiter = rateLimit({
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 //App Config
 const app = express();
+connectDB();
+
 const port = process.env.PORT || 4000;
 
 
