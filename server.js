@@ -73,26 +73,19 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: function (origin, callback) {
-      // Allow requests with no origin
-      // (mobile apps, Postman, server-to-server, cron jobs)
+
       if (!origin) return callback(null, true);
 
-      // Allow localhost
-      if (origin.includes("localhost")) {
-        return callback(null, true);
-      }
+      const isAllowed = allowedOrigins.some((allowedOrigin) =>
+        origin.startsWith(allowedOrigin)
+      );
 
-      // Allow Vercel preview deployments
-      if (origin.includes(".vercel.app")) {
-        return callback(null, true);
+      if (isAllowed) {
+        callback(null, true);
+      } else {
+        console.log("Blocked Origin:", origin);
+        callback(new Error("Not allowed by CORS"));
       }
-
-      // Allow your configured domains
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-
-      return callback(new Error(`CORS blocked: ${origin}`));
     },
 
     credentials: true,
