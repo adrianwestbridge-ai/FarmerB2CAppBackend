@@ -19,16 +19,34 @@ const Category = require("./models/Category");
 const Tag = require("./models/Tag");
 const User = require("./models/User");
 const slugify = require("slugify");
+const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
+const mongoSanitize = require("express-mongo-sanitize");
+const xss = require("xss-clean");
+
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 min
+  max: 100,
+
+  message: {
+    success: false,
+    message: "Too many requests, please try again after 15 min.",
+  },
+
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 //App Config
 const app = express();
 const port = process.env.PORT || 4000;
 
+
 const startServer = async () => {
   try {
     await connectDB(); // ✅ WAIT for DB
-
+    
     app.listen(port, () => {
       console.log(`🚀 Server started on PORT: ${port}`);
     });
@@ -38,31 +56,70 @@ const startServer = async () => {
   }
 };
 
-startServer();
+//startServer();
 
 //Middlewares
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
 const allowedOrigins = [
   process.env.FRONTEND_URL,
   process.env.SECONDARY_URL,
   process.env.THIRD_URL,
   process.env.FORTH_URL,
-  process.env.FIFTH_URL
+  process.env.FIFTH_URL,
 ].filter(Boolean);
 
 app.use(
   cors({
     origin: function (origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error("Not allowed by CORS"));
+      // Allow requests with no origin
+      // (mobile apps, Postman, server-to-server, cron jobs)
+      if (!origin) return callback(null, true);
+
+      // Allow localhost
+      if (origin.includes("localhost")) {
+        return callback(null, true);
       }
+
+      // Allow Vercel preview deployments
+      if (origin.includes(".vercel.app")) {
+        return callback(null, true);
+      }
+
+      // Allow your configured domains
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error(`CORS blocked: ${origin}`));
     },
+
     credentials: true,
-  }),
+  })
 );
+
+ app.use(helmet());
+// app.use(
+//   helmet.contentSecurityPolicy({
+//     directives: {
+//       defaultSrc: ["'self'"],
+//       scriptSrc: ["'self'", "'unsafe-inline'", "https:"],
+//       styleSrc: ["'self'", "'unsafe-inline'", "https:"],
+//       imgSrc: ["'self'", "data:", "https:"],
+//     },
+//   })
+// );
+// // No CSP means your site is vulnerable to XSS (Cross-Site Scripting).
+// app.use(helmet.frameguard({ action: "deny" }));
+// // Your site can be embedded in iframes → Clickjacking attack
+// app.use(helmet.noSniff());
+// // Browser may guess MIME types → security risk
+app.use(limiter);
+app.use(mongoSanitize());
+// NoSQL injection
+app.use(xss());
+// XSS
 
 // Session (required for passport-google-oauth)
 app.use(
@@ -239,6 +296,8 @@ Focus on:
 app.get("/", (req, res) => {
   res.send("API Working");
 });
+
+module.exports = app;
 
 // app.listen(port, () => {
 //   console.log(`Server started on PORT : ${port}`);
