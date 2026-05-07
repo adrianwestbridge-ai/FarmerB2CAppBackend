@@ -49,20 +49,43 @@ const allowedOrigins = [
   process.env.SECONDARY_URL,
   process.env.THIRD_URL,
   process.env.FORTH_URL,
-  process.env.FIFTH_URL
+  process.env.FIFTH_URL,
 ].filter(Boolean);
 
 app.use(
   cors({
-    origin: function (origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error("Not allowed by CORS"));
+    origin: (origin, callback) => {
+      // Allow server-to-server requests / Postman
+      if (!origin) {
+        return callback(null, true);
       }
+
+      // Allow localhost
+      if (origin.includes("localhost")) {
+        return callback(null, true);
+      }
+
+      // Allow Vercel preview deployments
+      if (origin.includes(".vercel.app")) {
+        return callback(null, true);
+      }
+
+      // Allow configured domains
+      const allowed = allowedOrigins.some((allowedOrigin) =>
+        origin.startsWith(allowedOrigin)
+      );
+
+      if (allowed) {
+        return callback(null, true);
+      }
+
+      console.log("❌ Blocked Origin:", origin);
+
+      return callback(new Error("CORS Not Allowed"));
     },
+
     credentials: true,
-  }),
+  })
 );
 
 // Session (required for passport-google-oauth)
