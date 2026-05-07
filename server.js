@@ -23,6 +23,7 @@ const slugify = require("slugify");
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 //App Config
 const app = express();
+connectDB();
 const port = process.env.PORT || 4000;
 
 const startServer = async () => {
@@ -38,7 +39,7 @@ const startServer = async () => {
   }
 };
 
-startServer();
+// startServer();
 
 //Middlewares
 app.use(express.json());
@@ -240,6 +241,8 @@ app.get("/", (req, res) => {
   res.send("API Working");
 });
 
-app.listen(port, () => {
-  console.log(`Server started on PORT : ${port}`);
-});
+// app.listen(port, () => {
+//   console.log(`Server started on PORT : ${port}`);
+// });
+
+module.exports = app;
