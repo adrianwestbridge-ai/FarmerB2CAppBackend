@@ -1,27 +1,38 @@
-const mongoose =require("mongoose");
-const dns = require('dns');
+const mongoose = require("mongoose");
+const dns = require("dns");
 
-// Force Google DNS for SRV resolution if local DNS fails
-dns.setServers(['8.8.8.8', '8.8.4.4']);
+dns.setServers(["8.8.8.8", "8.8.4.4"]);
+
+let isConnected = false;
 
 const connectDB = async () => {
-    try {
-        mongoose.connection.on('connected', () => {
-            console.log("DB Connected");
-        });
+  if (isConnected) {
+    return;
+  }
 
-        mongoose.connection.on('error', (err) => {
-            console.error("DB Connection Error:", err);
-        });
+  try {
+    mongoose.connection.on("connected", () => {
+      console.log("✅ MongoDB Connected");
+    });
 
-        // Force IPv4 (family: 4) to resolve local DNS/SRV issues on some networks
-        await mongoose.connect(`${process.env.MONGODB_URI}/thetechtimes`, {
-            family: 4
-        });
-    } catch (error) {
-        console.error("Failed to connect to MongoDB:", error.message);
-        // Don't exit here, let the server handle it or retry
-    }
-}
+    mongoose.connection.on("error", (err) => {
+      console.log("❌ MongoDB Error:", err.message);
+    });
+
+    mongoose.connection.on("disconnected", () => {
+      console.log("⚠️ MongoDB Disconnected");
+    });
+
+    await mongoose.connect(process.env.MONGODB_URI, {
+      dbName: "thetechtimes",
+      family: 4,
+    });
+
+    isConnected = true;
+
+  } catch (error) {
+    console.log("❌ Connection Failed:", error.message);
+  }
+};
 
 module.exports = connectDB;

@@ -26,18 +26,18 @@ const app = express();
 connectDB();
 const port = process.env.PORT || 4000;
 
-const startServer = async () => {
-  try {
-    await connectDB(); // ✅ WAIT for DB
+// const startServer = async () => {
+//   try {
+//     await connectDB(); // ✅ WAIT for DB
 
-    app.listen(port, () => {
-      console.log(`🚀 Server started on PORT: ${port}`);
-    });
-  } catch (err) {
-    console.error("❌ Failed to start server:", err.message);
-    process.exit(1); // stop app if DB fails
-  }
-};
+//     app.listen(port, () => {
+//       console.log(`🚀 Server started on PORT: ${port}`);
+//     });
+//   } catch (err) {
+//     console.error("❌ Failed to start server:", err.message);
+//     process.exit(1); // stop app if DB fails
+//   }
+// };
 
 // startServer();
 
