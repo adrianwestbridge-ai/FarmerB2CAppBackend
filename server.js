@@ -40,8 +40,6 @@ const limiter = rateLimit({
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 //App Config
 const app = express();
-connectDB();
-
 const port = process.env.PORT || 4000;
 
 
@@ -58,58 +56,48 @@ const startServer = async () => {
   }
 };
 
-//startServer();
+startServer();
 
 //Middlewares
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
 const allowedOrigins = [
   process.env.FRONTEND_URL,
   process.env.SECONDARY_URL,
   process.env.THIRD_URL,
   process.env.FORTH_URL,
-  process.env.FIFTH_URL,
+  process.env.FIFTH_URL
 ].filter(Boolean);
 
 app.use(
   cors({
     origin: function (origin, callback) {
-
-      if (!origin) return callback(null, true);
-
-      const isAllowed = allowedOrigins.some((allowedOrigin) =>
-        origin.startsWith(allowedOrigin)
-      );
-
-      if (isAllowed) {
+      if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
-        console.log("Blocked Origin:", origin);
         callback(new Error("Not allowed by CORS"));
       }
     },
-
     credentials: true,
-  })
+  }),
 );
 
- app.use(helmet());
-// app.use(
-//   helmet.contentSecurityPolicy({
-//     directives: {
-//       defaultSrc: ["'self'"],
-//       scriptSrc: ["'self'", "'unsafe-inline'", "https:"],
-//       styleSrc: ["'self'", "'unsafe-inline'", "https:"],
-//       imgSrc: ["'self'", "data:", "https:"],
-//     },
-//   })
-// );
-// // No CSP means your site is vulnerable to XSS (Cross-Site Scripting).
-// app.use(helmet.frameguard({ action: "deny" }));
-// // Your site can be embedded in iframes → Clickjacking attack
-// app.use(helmet.noSniff());
-// // Browser may guess MIME types → security risk
+// app.use(helmet());
+app.use(
+  helmet.contentSecurityPolicy({
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "https:"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https:"],
+      imgSrc: ["'self'", "data:", "https:"],
+    },
+  })
+);
+// No CSP means your site is vulnerable to XSS (Cross-Site Scripting).
+app.use(helmet.frameguard({ action: "deny" }));
+// Your site can be embedded in iframes → Clickjacking attack
+app.use(helmet.noSniff());
+// Browser may guess MIME types → security risk
 app.use(limiter);
 app.use(mongoSanitize());
 // NoSQL injection
@@ -291,8 +279,6 @@ Focus on:
 app.get("/", (req, res) => {
   res.send("API Working");
 });
-
-module.exports = app;
 
 // app.listen(port, () => {
 //   console.log(`Server started on PORT : ${port}`);
