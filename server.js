@@ -19,34 +19,16 @@ const Category = require("./models/Category");
 const Tag = require("./models/Tag");
 const User = require("./models/User");
 const slugify = require("slugify");
-const helmet = require("helmet");
-const rateLimit = require("express-rate-limit");
-const mongoSanitize = require("express-mongo-sanitize");
-const xss = require("xss-clean");
-
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 min
-  max: 100,
-
-  message: {
-    success: false,
-    message: "Too many requests, please try again after 15 min.",
-  },
-
-  standardHeaders: true,
-  legacyHeaders: false,
-});
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 //App Config
 const app = express();
 const port = process.env.PORT || 4000;
 
-
 const startServer = async () => {
   try {
     await connectDB(); // ✅ WAIT for DB
-    
+
     app.listen(port, () => {
       console.log(`🚀 Server started on PORT: ${port}`);
     });
@@ -81,28 +63,6 @@ app.use(
     credentials: true,
   }),
 );
-
-// app.use(helmet());
-app.use(
-  helmet.contentSecurityPolicy({
-    directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "https:"],
-      styleSrc: ["'self'", "'unsafe-inline'", "https:"],
-      imgSrc: ["'self'", "data:", "https:"],
-    },
-  })
-);
-// No CSP means your site is vulnerable to XSS (Cross-Site Scripting).
-app.use(helmet.frameguard({ action: "deny" }));
-// Your site can be embedded in iframes → Clickjacking attack
-app.use(helmet.noSniff());
-// Browser may guess MIME types → security risk
-app.use(limiter);
-app.use(mongoSanitize());
-// NoSQL injection
-app.use(xss());
-// XSS
 
 // Session (required for passport-google-oauth)
 app.use(
@@ -280,6 +240,6 @@ app.get("/", (req, res) => {
   res.send("API Working");
 });
 
-// app.listen(port, () => {
-//   console.log(`Server started on PORT : ${port}`);
-// });
+app.listen(port, () => {
+  console.log(`Server started on PORT : ${port}`);
+});
