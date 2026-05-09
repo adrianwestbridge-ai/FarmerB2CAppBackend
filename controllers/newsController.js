@@ -62,168 +62,168 @@ const createNews = async (req, res) => {
  * @route   GET /api/news
  * @access  Public
  */
-// const getAllNews = async (req, res) => {
-//   try {
-//     const page = Number(req.query.page) || 1;
-//     const limit = Number(req.query.limit) || 100;
-//     const skip = (page - 1) * limit;
-
-//     const { search, category, tag, status } = req.query;
-
-//     const query = {};
-//     if (status) {
-//       const statusArray = status.split(",");
-//       query.status = { $in: statusArray };
-//     } else {
-//       query.status = "published";
-//     }
-
-//     if (search) {
-//       query.$or = [
-//         { title: { $regex: search, $options: "i" } },
-//         { summary: { $regex: search, $options: "i" } },
-//       ];
-//     }
-
-//     // ✅ CATEGORY: ID OR NAME OR SLUG
-//     if (category) {
-//       // If ObjectId
-//       if (mongoose.Types.ObjectId.isValid(category)) {
-//         query.category = category;
-//       }
-//       // If slug or name
-//       else {
-//         const cat = await Category.findOne({
-//           $or: [{ slug: category }, { name: category }],
-//         });
-
-//         if (!cat) {
-//           return res.status(404).json({
-//             success: false,
-//             message: "Category not found",
-//           });
-//         }
-
-//         query.category = cat._id;
-//       }
-//     }
-
-//     if (tag) {
-//       if (mongoose.Types.ObjectId.isValid(tag)) {
-//         query.tags = tag;
-//       } else {
-//         const tagDoc = await Tag.findOne({
-//           $or: [{ slug: tag }, { name: tag }],
-//         });
-
-//         if (!tagDoc) {
-//           return res.status(404).json({
-//             success: false,
-//             message: "Tag not found",
-//           });
-//         }
-
-//         query.tags = tagDoc._id;
-//       }
-//     }
-
-//     const total = await News.countDocuments(query);
-
-//     const news = await News.find(query)
-//       .populate("category", "name slug")
-//       .populate("tags", "name slug")
-//       .populate("author", "name avatar")
-//       .sort({ publishedAt: -1, createdAt: -1 })
-//       .skip(skip)
-//       .limit(limit);
-
-//     res.status(200).json({
-//       success: true,
-//       page,
-//       totalPages: Math.ceil(total / limit),
-//       totalNews: total,
-//       data: news,
-//     });
-//   } catch (error) {
-//     res.status(500).json({
-//       success: false,
-//       message: "Failed to fetch news",
-//       error: error.message,
-//     });
-//   }
-// };
-
 const getAllNews = async (req, res) => {
   try {
-
-    const page = Math.max(Number(req.query.page) || 1, 1);
-
-    const limit = Math.min(
-      Number(req.query.limit) || 100,
-      200
-    );
-
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 100;
     const skip = (page - 1) * limit;
 
-    const { search, category, status } = req.query;
+    const { search, category, tag, status } = req.query;
 
     const query = {};
+    if (status) {
+      const statusArray = status.split(",");
+      query.status = { $in: statusArray };
+    } else {
+      query.status = "published";
+    }
 
-    query.status = status || "published";
-
-    // SEARCH
     if (search) {
-      query.title = {
-        $regex: search,
-        $options: "i",
-      };
+      query.$or = [
+        { title: { $regex: search, $options: "i" } },
+        { summary: { $regex: search, $options: "i" } },
+      ];
     }
 
-    // CATEGORY
+    // ✅ CATEGORY: ID OR NAME OR SLUG
     if (category) {
-      query.category = category;
+      // If ObjectId
+      if (mongoose.Types.ObjectId.isValid(category)) {
+        query.category = category;
+      }
+      // If slug or name
+      else {
+        const cat = await Category.findOne({
+          $or: [{ slug: category }, { name: category }],
+        });
+
+        if (!cat) {
+          return res.status(404).json({
+            success: false,
+            message: "Category not found",
+          });
+        }
+
+        query.category = cat._id;
+      }
     }
 
-    // PARALLEL DB CALLS
-    const [news, total] = await Promise.all([
+    if (tag) {
+      if (mongoose.Types.ObjectId.isValid(tag)) {
+        query.tags = tag;
+      } else {
+        const tagDoc = await Tag.findOne({
+          $or: [{ slug: tag }, { name: tag }],
+        });
 
-      News.find(query)
-        .select(`
-          title
-          slug
-          image
-          summary
-          createdAt
-          publishedAt
-        `)
-        .sort({ publishedAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
+        if (!tagDoc) {
+          return res.status(404).json({
+            success: false,
+            message: "Tag not found",
+          });
+        }
 
-      News.countDocuments(query)
+        query.tags = tagDoc._id;
+      }
+    }
 
-    ]);
+    const total = await News.countDocuments(query);
 
-    return res.status(200).json({
+    const news = await News.find(query)
+      .populate("category", "name slug")
+      .populate("tags", "name slug")
+      .populate("author", "name avatar")
+      .sort({ publishedAt: -1, createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    res.status(200).json({
       success: true,
       page,
       totalPages: Math.ceil(total / limit),
       totalNews: total,
       data: news,
     });
-
   } catch (error) {
-
-    console.error(error);
-
-    return res.status(500).json({
+    res.status(500).json({
       success: false,
       message: "Failed to fetch news",
+      error: error.message,
     });
-
   }
 };
+
+// const getAllNews = async (req, res) => {
+//   try {
+
+//     const page = Math.max(Number(req.query.page) || 1, 1);
+
+//     const limit = Math.min(
+//       Number(req.query.limit) || 100,
+//       200
+//     );
+
+//     const skip = (page - 1) * limit;
+
+//     const { search, category, status } = req.query;
+
+//     const query = {};
+
+//     query.status = status || "published";
+
+//     // SEARCH
+//     if (search) {
+//       query.title = {
+//         $regex: search,
+//         $options: "i",
+//       };
+//     }
+
+//     // CATEGORY
+//     if (category) {
+//       query.category = category;
+//     }
+
+//     // PARALLEL DB CALLS
+//     const [news, total] = await Promise.all([
+
+//       News.find(query)
+//         .select(`
+//           title
+//           slug
+//           image
+//           summary
+//           createdAt
+//           publishedAt
+//         `)
+//         .sort({ publishedAt: -1 })
+//         .skip(skip)
+//         .limit(limit)
+//         .lean(),
+
+//       News.countDocuments(query)
+
+//     ]);
+
+//     return res.status(200).json({
+//       success: true,
+//       page,
+//       totalPages: Math.ceil(total / limit),
+//       totalNews: total,
+//       data: news,
+//     });
+
+//   } catch (error) {
+
+//     console.error(error);
+
+//     return res.status(500).json({
+//       success: false,
+//       message: "Failed to fetch news",
+//     });
+
+//   }
+// };
 /**
  * @desc    Get single news by ID
  * @route   GET /api/news/:id
