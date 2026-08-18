@@ -1,22 +1,20 @@
-// middleware/authMiddleware.js
-
-const User = require("../models/User");
 const jwt = require("jsonwebtoken");
+const Farmer = require("../models/Farmer");
+const Admin = require("../models/Admin");
+const Partner = require("../models/Partner");
 
 /**
- * Protect routes (JWT required)
+ * Protect routes (JWT token required)
  */
 const protect = async (req, res, next) => {
   try {
     let token;
 
-    // Check Authorization header
     if (
       req.headers.authorization &&
       req.headers.authorization.startsWith("Bearer")
     ) {
       token = req.headers.authorization.split(" ")[1];
-      // console.log(token);
     }
 
     if (!token) {
@@ -27,23 +25,46 @@ const protect = async (req, res, next) => {
     }
 
     // Verify token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const secret = process.env.JWT_SECRET || "defaultsecret";
+    const decoded = jwt.verify(token, secret);
 
-    // Get user from token
-    req.user = await User.findById(decoded.id).select("-password");
+    // Try finding user across Farmer, Admin, Partner models based on role or id
+    let user = null;
+    if (decoded.role === "ADMIN" || decoded.role === "SUPER_ADMIN" || decoded.userType === "admin") {
+      user = await Admin.findById(decoded.id).select("-password");
+      if (user) user.userType = "admin";
+    } else if (decoded.userType === "partner") {
+      user = await Partner.findById(decoded.id).select("-password");
+      if (user) user.userType = "partner";
+    } else {
+      // Default to Farmer or general lookup
+      user = await Farmer.findById(decoded.id).select("-password");
+      if (user) {
+        user.userType = "farmer";
+      } else {
+        user = await Admin.findById(decoded.id).select("-password");
+        if (user) {
+          user.userType = "admin";
+        } else {
+          user = await Partner.findById(decoded.id).select("-password");
+          if (user) user.userType = "partner";
+        }
+      }
+    }
 
-    if (!req.user) {
+    if (!user) {
       return res.status(401).json({
         success: false,
-        message: "User not found",
+        message: "User not found or account inactive",
       });
     }
 
+    req.user = user;
     next();
   } catch (error) {
     return res.status(401).json({
       success: false,
-      message: "Not authorized, token invalid",
+      message: "Not authorized, token invalid or expired",
     });
   }
 };
@@ -52,8 +73,11 @@ const protect = async (req, res, next) => {
  * Admin only access
  */
 const adminOnly = (req, res, next) => {
-    next();
-  if (req.user && req.user.role === "admin") {
+  if (
+    req.user &&
+    (req.user.userType === "admin" ||
+      ["SUPER_ADMIN", "ADMIN", "MODERATOR"].includes(req.user.role))
+  ) {
     next();
   } else {
     return res.status(403).json({
@@ -64,37 +88,36 @@ const adminOnly = (req, res, next) => {
 };
 
 /**
- * Admin or Editor access
+ * Farmer only access
  */
-const adminOrEditor = (req, res, next) => {
-  if (req.user && ["admin", "editor"].includes(req.user.role)) {
+const farmerOnly = (req, res, next) => {
+  if (req.user && req.user.userType === "farmer") {
     next();
   } else {
     return res.status(403).json({
       success: false,
-      message: "Admin or Editor access required",
+      message: "Farmer access required",
     });
   }
 };
 
 /**
- * Admin, Editor, or Author access
+ * Partner/Agent only access
  */
-const adminEditorAuthor = (req, res, next) => {
-  if (req.user && ["admin", "editor", "author"].includes(req.user.role)) {
+const partnerOnly = (req, res, next) => {
+  if (req.user && req.user.userType === "partner") {
     next();
   } else {
     return res.status(403).json({
       success: false,
-      message: "Permission denied",
+      message: "Partner access required",
     });
   }
 };
 
-// Export all middleware functions (CommonJS)
 module.exports = {
   protect,
   adminOnly,
-  adminOrEditor,
-  adminEditorAuthor,
+  farmerOnly,
+  partnerOnly,
 };

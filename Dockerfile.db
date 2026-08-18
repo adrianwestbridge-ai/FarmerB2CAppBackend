@@ -1,0 +1,16 @@
+# ==========================================
+# Dockerfile for Farmer B2C MongoDB Database
+# ==========================================
+
+# 1. Use official MongoDB 7.0 Community Edition image
+FROM mongo:7.0
+
+# 2. Set default container environment variables
+ENV MONGO_INITDB_DATABASE=FarmerB2C
+
+# 3. Expose standard MongoDB port
+EXPOSE 27017
+
+# 4. Set healthcheck to ensure database readiness
+HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=5 \
+  CMD ["mongosh", "--eval", "db.adminCommand('ping')"]

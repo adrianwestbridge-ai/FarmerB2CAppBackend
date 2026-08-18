@@ -1,49 +1,31 @@
 const express = require("express");
 const cors = require("cors");
-require("dotenv").config(); // instead of import "dotenv/config"
+require("dotenv").config();
 const connectDB = require("./config/mongodb");
-const newsRoutes = require("./routes/newsRoutes.js");
-const categoryRoutes = require("./routes/categoryRoutes.js");
-const calendarRoutes = require("./routes/calendarRoutes");
-const tagRoutes = require("./routes/tagRoutes.js");
-const userRoutes = require("./routes/usersRoutes");
-const authRoutes = require("./routes/auth");
-const passport = require("passport");
-const session = require("express-session");
 
-require("./config/passport"); // just require it, no variable needed
+// Import Route Handlers
+const authRoutes = require("./routes/authRoutes");
+const farmerRoutes = require("./routes/farmerRoutes");
+const adminRoutes = require("./routes/adminRoutes");
+const productRoutes = require("./routes/productRoutes");
+const categoryRoutes = require("./routes/categoryRoutes");
+const cartRoutes = require("./routes/cartRoutes");
+const orderRoutes = require("./routes/orderRoutes");
+const reviewRoutes = require("./routes/reviewRoutes");
+const farmerVisitRoutes = require("./routes/farmerVisitRoutes");
+const partnerRoutes = require("./routes/partnerRoutes");
 
-const { GoogleGenerativeAI } = require("@google/generative-ai");
-const News = require("./models/News");
-const Category = require("./models/Category");
-const Tag = require("./models/Tag");
-const User = require("./models/User");
-const slugify = require("slugify");
-
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-//App Config
+// App Config
 const app = express();
-connectDB();
 const port = process.env.PORT || 4000;
 
-// const startServer = async () => {
-//   try {
-//     await connectDB(); // ✅ WAIT for DB
+// Connect Database
+connectDB();
 
-//     app.listen(port, () => {
-//       console.log(`🚀 Server started on PORT: ${port}`);
-//     });
-//   } catch (err) {
-//     console.error("❌ Failed to start server:", err.message);
-//     process.exit(1); // stop app if DB fails
-//   }
-// };
-
-// startServer();
-
-//Middlewares
+// Middlewares
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
 const allowedOrigins = [
   process.env.FRONTEND_URL,
   process.env.SECONDARY_URL,
@@ -55,13 +37,13 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow server-to-server requests / Postman
+      // Allow server-to-server requests / Postman / Mobile Apps
       if (!origin) {
         return callback(null, true);
       }
 
       // Allow localhost
-      if (origin.includes("localhost")) {
+      if (origin.includes("localhost") || origin.includes("127.0.0.1") || origin.includes("10.0.2.2")) {
         return callback(null, true);
       }
 
@@ -79,193 +61,47 @@ app.use(
         return callback(null, true);
       }
 
-      console.log("❌ Blocked Origin:", origin);
-
-      return callback(new Error("CORS Not Allowed"));
+      return callback(null, true); // Fallback allow for React Native mobile API calls
     },
-
     credentials: true,
   })
 );
 
-// Session (required for passport-google-oauth)
-app.use(
-  session({
-    secret: process.env.SESSION_SECRET,
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      httpOnly: true,
-      secure: false, // true only in HTTPS
-      maxAge: 1000 * 60 * 60 * 24, // 1 day
-      sameSite: "lax", //diffrent front and backend
-    },
-  }),
-);
-
-// Passport
-app.use(passport.initialize());
-app.use(passport.session());
-
-// Routes
-app.use("/auth", authRoutes);
-app.use("/api/categories", categoryRoutes);
-app.use("/api/news", newsRoutes);
-app.use("/api/tags", tagRoutes);
-app.use("/api/users", userRoutes);
-app.use("/api/calendar", calendarRoutes);
-
-app.get("/api/cron", async (req, res) => {
-  try {
-    if (req.query.secret !== process.env.CRON_SECRET) {
-      return res.status(403).json({ error: "Unauthorized" });
-    }
-
-    console.log("Cron job triggered");
-
-    // 1. Fetch Admin User
-    const adminUser = await User.findOne({ role: "admin" });
-    if (!adminUser) {
-      return res.status(500).json({ error: "No admin user found" });
-    }
-
-    // 2. Fetch Categories and Tags
-    const categories = await Category.find({ isActive: true });
-    const tags = await Tag.find();
-
-    if (categories.length === 0) {
-      return res.status(500).json({ error: "No categories found" });
-    }
-
-    const categoryNames = categories.map((c) => c.name).join(", ");
-    const tagNames = tags.map((t) => t.name).join(", ");
-
-    // 3. Initialize Gemini
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
-
-    // 4. Prompt to generate 5 news articles
-    const prompt = `
-    Generate 5 latest tech news articles in JSON format.
-    Return ONLY a JSON array of objects.
-    Avoid repeating previous topics.
-
-    Current time: ${new Date().toISOString()}
-    BASED ON INDIAN HEADLINES
-
-Focus on:
--Tech
--Jobs
--India
--World
--Sport
--Data
--Health
--Opinion
--Science
--Business
-- AI
-- Startups
-- Gadgets
-- Cybersecurity
-- Trending technologies
-
-    Each object MUST have:
-    - title: string
-    - summary: string (max 500 chars)
-    - content: string (detailed HTML content)
-    - image: string (placeholder image URL from Unsplash: https://images.unsplash.com/photo-...)
-    - categoryName: string (MUST be one of: [${categoryNames}])
-    - tagNames: array of strings (choose relevant ones from: [${tagNames}])
-
-    Keep it realistic like a premium tech news website.
-    Example JSON:
-    [
-      {
-        "title": "Example Title",
-        "summary": "Short summary...",
-        "content": "<p>Full content...</p>",
-        "image": "https://images.unsplash.com...",
-        "categoryName": "Gadgets",
-        "tagNames": ["AI", "Apple"]
-      }
-    ]
-    `;
-
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    let text = response.text();
-
-    // Clean up text if Gemini adds markdown code blocks
-    text = text.replace(/```json|```/g, "").trim();
-
-    let articles;
-    try {
-      articles = JSON.parse(text);
-    } catch (parseError) {
-      console.error("Failed to parse Gemini response:", text);
-      return res.status(500).json({ error: "Invalid JSON from AI" });
-    }
-
-    const savedDocs = [];
-
-    for (const articleData of articles) {
-      // Find Category ID
-      const category =
-        categories.find((c) => c.name === articleData.categoryName) ||
-        categories[0];
-
-      // Find Tag IDs
-      const tagIds = (articleData.tagNames || [])
-        .map((tn) => tags.find((t) => t.name === tn)?._id)
-        .filter((id) => id);
-
-      // Generate UNIQUE Slug
-      let slug = slugify(articleData.title, { lower: true, strict: true });
-      const existingNews = await News.findOne({ slug });
-      if (existingNews) {
-        slug = `${slug}-${Date.now()}`;
-      }
-
-      const newsDoc = new News({
-        title: articleData.title,
-        slug: slug,
-        summary: articleData.summary,
-        content: articleData.content,
-        image: articleData.image,
-        category: category._id,
-        tags: tagIds,
-        author: adminUser._id,
-        status: "pending",
-        isBreaking: Math.random() > 0.8, // 20% chance to be breaking news
-        publishedAt: new Date(),
-        views: 0,
-        likesCount: 0,
-        commentsCount: 0,
-      });
-
-      await newsDoc.save();
-      savedDocs.push(newsDoc);
-    }
-
-    res.status(200).json({
-      success: true,
-      count: savedDocs.length,
-      message: "News generated and saved successfully",
-    });
-  } catch (error) {
-    console.error("Cron Error:", error);
-    res
-      .status(500)
-      .json({ error: "Cron execution failed", details: error.message });
-  }
+// Health check endpoint
+app.get("/api/health", (req, res) => {
+  res.status(200).json({ status: "OK", message: "Farmer B2C Backend API Running" });
 });
 
 app.get("/", (req, res) => {
-  res.send("API Working");
+  res.send("Farmer B2C Backend API Working");
 });
 
-// app.listen(port, () => {
-//   console.log(`Server started on PORT : ${port}`);
-// });
+// API Routes Mounting
+app.use("/api/auth", authRoutes);
+app.use("/api/farmers", farmerRoutes);
+app.use("/api/admins", adminRoutes);
+app.use("/api/products", productRoutes);
+app.use("/api/categories", categoryRoutes);
+app.use("/api/cart", cartRoutes);
+app.use("/api/orders", orderRoutes);
+app.use("/api/reviews", reviewRoutes);
+app.use("/api/visits", farmerVisitRoutes);
+app.use("/api/partners", partnerRoutes);
+
+// Global Error Handler
+app.use((err, req, res, next) => {
+  console.error("❌ Unhandled Error:", err.stack);
+  res.status(err.status || 500).json({
+    success: false,
+    message: err.message || "Internal Server Error",
+  });
+});
+
+// Start Server if directly executed
+if (require.main === module) {
+  app.listen(port, () => {
+    console.log(`🚀 Farmer B2C Backend Server running on PORT: ${port}`);
+  });
+}
 
 module.exports = app;

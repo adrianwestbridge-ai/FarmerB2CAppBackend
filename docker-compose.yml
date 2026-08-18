@@ -1,0 +1,52 @@
+name: farmer_b2c
+
+services:
+  # ==========================================
+  # Database Service (MongoDB Container)
+  # ==========================================
+  mongodb:
+    build:
+      context: .
+      dockerfile: Dockerfile.db
+    container_name: farmer_b2c_mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_DATABASE=FarmerB2C
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - farmer_network
+
+  # ==========================================
+  # Backend API Service (Node.js/Express Container)
+  # ==========================================
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: farmer_b2c_backend
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    env_file:
+      - .env
+    environment:
+      - PORT=4000
+      - NODE_ENV=production
+      - MONGODB_URI=mongodb://mongodb:27017/FarmerB2C
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - farmer_network
+
+# Persistent storage for MongoDB data
+volumes:
+  mongodb_data:
+
+# Internal Docker network connecting Backend & DB containers
+networks:
+  farmer_network:
+    driver: bridge

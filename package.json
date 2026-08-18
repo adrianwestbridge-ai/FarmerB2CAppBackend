@@ -1,12 +1,14 @@
 {
-  "name": "thetechtimesbackend",
+  "name": "farmer-b2c-app-backend",
   "version": "2.0.0",
-  "description": "",
+  "description": "Backend API for Farmer B2C Application",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "run": "node server.js"
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "seed": "node seedData.js"
   },
   "author": "",
   "license": "ISC",

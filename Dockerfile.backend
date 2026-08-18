@@ -1,0 +1,28 @@
+# ==========================================
+# Dockerfile for Farmer B2C Express Backend
+# ==========================================
+
+# 1. Use official Node.js 20 lightweight Alpine Linux image
+FROM node:20-alpine
+
+# 2. Set container working directory
+WORKDIR /app
+
+# 3. Copy package management files first to leverage Docker layer caching
+COPY package*.json ./
+
+# 4. Install production dependencies
+RUN npm install --omit=dev
+
+# 5. Copy remaining application source code
+COPY . .
+
+# 6. Expose Express API port
+EXPOSE 4000
+
+# 7. Set default environment variables
+ENV PORT=4000
+ENV NODE_ENV=production
+
+# 8. Start server application
+CMD ["npm", "start"]
