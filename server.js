@@ -19,6 +19,14 @@ const partnerRoutes = require("./routes/partnerRoutes");
 const app = express();
 const port = process.env.PORT || 4000;
 
+const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
+
+app.set("trust proxy", 1); // REQUIRED behind Caddy
+app.use(helmet());
+app.use("/api/auth", rateLimit({ windowMs: 15 * 60 * 1000, max: 20 }));
+app.use("/api", rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
+
 // Connect Database
 connectDB();
 
@@ -26,46 +34,8 @@ connectDB();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-const allowedOrigins = [
-  process.env.FRONTEND_URL,
-  process.env.SECONDARY_URL,
-  process.env.THIRD_URL,
-  process.env.FORTH_URL,
-  process.env.FIFTH_URL,
-].filter(Boolean);
-
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      // Allow server-to-server requests / Postman / Mobile Apps
-      if (!origin) {
-        return callback(null, true);
-      }
-
-      // Allow localhost
-      if (origin.includes("localhost") || origin.includes("127.0.0.1") || origin.includes("10.0.2.2")) {
-        return callback(null, true);
-      }
-
-      // Allow Vercel preview deployments
-      if (origin.includes(".vercel.app")) {
-        return callback(null, true);
-      }
-
-      // Allow configured domains
-      const allowed = allowedOrigins.some((allowedOrigin) =>
-        origin.startsWith(allowedOrigin)
-      );
-
-      if (allowed) {
-        return callback(null, true);
-      }
-
-      return callback(null, true); // Fallback allow for React Native mobile API calls
-    },
-    credentials: true,
-  })
-);
+// CORS Configuration (Native Android sends no Origin header; disable CORS to prevent arbitrary browser cross-origin access)
+app.use(cors({ origin: false, credentials: false }));
 
 // Health check endpoint
 app.get("/api/health", (req, res) => {

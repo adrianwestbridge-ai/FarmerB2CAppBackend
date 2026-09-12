@@ -4,7 +4,8 @@ const Admin = require('../models/Admin');
 const Partner = require('../models/Partner');
 
 const generateToken = (id, userType, role) => {
-  const secret = process.env.JWT_SECRET || 'defaultsecret';
+  const secret = process.env.JWT_SECRET;
+  if (!secret) throw new Error("JWT_SECRET is not set");
   return jwt.sign({ id, userType, role }, secret, {
     expiresIn: '30d',
   });

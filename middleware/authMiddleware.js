@@ -25,7 +25,8 @@ const protect = async (req, res, next) => {
     }
 
     // Verify token
-    const secret = process.env.JWT_SECRET || "defaultsecret";
+    const secret = process.env.JWT_SECRET;
+    if (!secret) throw new Error("JWT_SECRET is not set");
     const decoded = jwt.verify(token, secret);
 
     // Try finding user across Farmer, Admin, Partner models based on role or id
