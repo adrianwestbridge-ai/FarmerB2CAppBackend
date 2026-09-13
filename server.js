@@ -24,8 +24,16 @@ const rateLimit = require("express-rate-limit");
 
 app.set("trust proxy", 1); // REQUIRED behind Caddy
 app.use(helmet());
-app.use("/api/auth", rateLimit({ windowMs: 15 * 60 * 1000, max: 20 }));
-app.use("/api", rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
+app.use("/api/auth", rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: { success: false, message: 'Too many requests. Please try again in a few minutes.' },
+}));
+app.use("/api", rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  message: { success: false, message: 'Too many requests. Please try again in a few minutes.' },
+}));
 
 // Connect Database
 connectDB();

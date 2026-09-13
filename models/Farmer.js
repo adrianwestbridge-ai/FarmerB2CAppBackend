@@ -4,6 +4,7 @@ const bcrypt = require('bcrypt');
 const farmerSchema = new mongoose.Schema({
   owner_id: { type: String, required: true },
   phoneNumber: { type: String, required: true, unique: true, index: true },
+  username: { type: String, unique: true, sparse: true, index: true, trim: true, lowercase: true },
   name: { type: String, default: '' },
   language: { type: String, default: 'English' },
   cropType: { type: String, default: '' },

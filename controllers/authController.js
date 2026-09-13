@@ -11,12 +11,45 @@ const generateToken = (id, userType, role) => {
   });
 };
 
+// Unified lookup across Farmer/Admin/Partner by phone, owner_id, or username - mirrors loginFarmer's matching rules
+const findUnifiedUser = async (identifier) => {
+  const normalizedUsername = String(identifier).trim().toLowerCase();
+
+  const farmer = await Farmer.findOne({
+    $or: [
+      { phoneNumber: identifier },
+      { owner_id: identifier },
+      { username: normalizedUsername },
+    ],
+  });
+  if (farmer) return { user: farmer, userType: 'farmer' };
+
+  const admin = await Admin.findOne({
+    $or: [
+      { username: identifier },
+      { owner_id: identifier },
+    ],
+  });
+  if (admin) return { user: admin, userType: 'admin' };
+
+  const partner = await Partner.findOne({
+    $or: [
+      { phoneNumber: identifier },
+      { owner_id: identifier },
+    ],
+  });
+  if (partner) return { user: partner, userType: 'partner' };
+
+  return null;
+};
+
 // @desc    Register a new Farmer
 // @route   POST /api/auth/register
 exports.registerFarmer = async (req, res) => {
   try {
     const {
       phoneNumber,
+      username,
       name,
       language,
       cropType,
@@ -33,15 +66,30 @@ exports.registerFarmer = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Phone number is required' });
     }
 
+    if (!username) {
+      return res.status(400).json({ success: false, message: 'Username is required' });
+    }
+
+    const normalizedUsername = String(username).trim().toLowerCase();
+    if (!/^[a-z0-9_]{3,20}$/.test(normalizedUsername)) {
+      return res.status(400).json({ success: false, message: 'Username must be 3-20 characters and contain only lowercase letters, numbers, and underscores' });
+    }
+
     const existingFarmer = await Farmer.findOne({ phoneNumber });
     if (existingFarmer) {
       return res.status(400).json({ success: false, message: 'Farmer already registered with this phone number' });
+    }
+
+    const existingUsername = await Farmer.findOne({ username: normalizedUsername });
+    if (existingUsername) {
+      return res.status(400).json({ success: false, message: 'Username already exists' });
     }
 
     const owner_id = `farmer_${Date.now()}`;
     const farmer = await Farmer.create({
       owner_id,
       phoneNumber,
+      username: normalizedUsername,
       name: name || '',
       language: language || 'English',
       cropType: cropType || '',
@@ -82,6 +130,7 @@ exports.loginFarmer = async (req, res) => {
       $or: [
         { phoneNumber: identifier },
         { owner_id: identifier },
+        { username: String(identifier).trim().toLowerCase() },
       ],
     });
 
@@ -478,4 +527,95 @@ exports.getAllUsers = async (req, res) => {
   }
 };
 
+// @desc    Check whether a username is available
+// @route   GET /api/auth/check-username?username=xyz
+exports.checkUsernameAvailability = async (req, res) => {
+  try {
+    const { username } = req.query;
+
+    if (!username) {
+      return res.status(400).json({ success: false, message: 'Username is required' });
+    }
+
+    const normalizedUsername = String(username).trim().toLowerCase();
+    if (!/^[a-z0-9_]{3,20}$/.test(normalizedUsername)) {
+      return res.status(400).json({ success: false, message: 'Username must be 3-20 characters and contain only lowercase letters, numbers, and underscores' });
+    }
+
+    const [existingFarmer, existingAdmin] = await Promise.all([
+      Farmer.findOne({ username: normalizedUsername }),
+      Admin.findOne({ username: normalizedUsername }),
+    ]);
+
+    const available = !existingFarmer && !existingAdmin;
+
+    res.status(200).json({
+      success: true,
+      available,
+      message: available ? 'Username is available' : 'Username already exists',
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Check whether a username/phone number belongs to an existing account (forgot password step 1)
+// @route   POST /api/auth/forgot-password/check
+exports.forgotPasswordCheck = async (req, res) => {
+  try {
+    const { identifier } = req.body;
+
+    if (!identifier) {
+      return res.status(400).json({ success: false, message: 'Username or phone number is required' });
+    }
+
+    const found = await findUnifiedUser(identifier);
+
+    res.status(200).json({
+      success: true,
+      exists: !!found,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Reset a forgotten password given a verified username/phone number (forgot password step 2)
+// @route   POST /api/auth/forgot-password/reset
+exports.forgotPasswordReset = async (req, res) => {
+  try {
+    const { identifier, newPassword, confirmPassword } = req.body;
+
+    if (!identifier) {
+      return res.status(400).json({ success: false, message: 'Username or phone number is required' });
+    }
+
+    if (!newPassword || !confirmPassword) {
+      return res.status(400).json({ success: false, message: 'New password and confirm password are required' });
+    }
+
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ success: false, message: 'New password and confirm password do not match' });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ success: false, message: 'Password must be at least 6 characters long' });
+    }
+
+    const found = await findUnifiedUser(identifier);
+    if (!found) {
+      return res.status(404).json({ success: false, message: 'No account found with this username or phone number' });
+    }
+
+    found.user.password = newPassword;
+    await found.user.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Password reset successful',
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
 

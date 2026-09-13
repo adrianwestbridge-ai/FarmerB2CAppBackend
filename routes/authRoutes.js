@@ -8,11 +8,17 @@ const {
   updateMe,
   updatePassword,
   getAllUsers,
+  checkUsernameAvailability,
+  forgotPasswordCheck,
+  forgotPasswordReset,
 } = require('../controllers/authController');
 const { protect } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
+router.get('/check-username', checkUsernameAvailability);
+router.post('/forgot-password/check', forgotPasswordCheck);
+router.post('/forgot-password/reset', forgotPasswordReset);
 router.post('/register', registerFarmer);
 router.post('/login', loginFarmer);
 router.post('/admin/login', loginAdmin);

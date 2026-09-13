@@ -57,6 +57,7 @@ const seedData = async () => {
       {
         owner_id: 'farmer_001',
         phoneNumber: '9999999999', // Primary Demo Farmer
+        username: 'ramesh_patel',
         name: 'Ramesh Patel',
         language: 'Gujarati',
         cropType: 'Cotton & Groundnut',
@@ -72,6 +73,7 @@ const seedData = async () => {
       {
         owner_id: 'farmer_002',
         phoneNumber: '9876543210',
+        username: 'gurpreet_singh',
         name: 'Gurpreet Singh',
         language: 'Punjabi',
         cropType: 'Paddy & Wheat',
@@ -87,6 +89,7 @@ const seedData = async () => {
       {
         owner_id: 'farmer_003',
         phoneNumber: '9812345678',
+        username: 'suresh_kumar',
         name: 'Suresh Kumar',
         language: 'Hindi',
         cropType: 'Sugarcane & Potato',
@@ -102,6 +105,7 @@ const seedData = async () => {
       {
         owner_id: 'farmer_004',
         phoneNumber: '9765432109',
+        username: 'aniket_deshmukh',
         name: 'Aniket Deshmukh',
         language: 'Marathi',
         cropType: 'Soybean & Pomegranate',
@@ -117,6 +121,7 @@ const seedData = async () => {
       {
         owner_id: 'farmer_005',
         phoneNumber: '9654321098',
+        username: 'lakshmi_narayana',
         name: 'Lakshmi Narayana',
         language: 'Kannada',
         cropType: 'Tomato & Chilli',
@@ -859,6 +864,7 @@ const seedData = async () => {
       {
         owner_id: demoFarmer.owner_id,
         farmerId: demoFarmer._id.toString(),
+        farmerName: demoFarmer.name,
         productId: seededProducts[0]._id, // Basmati Seeds
         productName: seededProducts[0].name,
         productImage: seededProducts[0].images[0],
@@ -874,6 +880,7 @@ const seedData = async () => {
       {
         owner_id: demoFarmer.owner_id,
         farmerId: demoFarmer._id.toString(),
+        farmerName: demoFarmer.name,
         productId: seededProducts[6]._id, // IFFCO NPK
         productName: seededProducts[6].name,
         productImage: seededProducts[6].images[0],
@@ -892,6 +899,7 @@ const seedData = async () => {
       {
         owner_id: demoFarmer.owner_id,
         farmerId: demoFarmer._id.toString(),
+        farmerName: demoFarmer.name,
         productId: seededProducts[18]._id, // Sprayer
         productName: seededProducts[18].name,
         productImage: seededProducts[18].images[0],
@@ -989,7 +997,8 @@ const seedData = async () => {
     console.log('🎉 DATA SEEDING COMPLETED SUCCESSFULLY!');
     console.log('----------------------------------------------------');
     console.log('🔑 TEST CREDENTIALS:');
-    console.log('Farmer Demo Phone : 9999999999 (Password: 123456)');
+    console.log('Farmer Demo Phone    : 9999999999 (Password: 123456)');
+    console.log('Farmer Demo Username : ramesh_patel (Password: 123456)');
     console.log('Admin Username    : admin_username (Password: Admin@123)');
     console.log('Partner Phone     : 9888877777 (Password: 123456)');
     console.log('----------------------------------------------------');

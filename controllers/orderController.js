@@ -98,6 +98,7 @@ exports.createOrder = async (req, res) => {
       const newOrder = await Order.create({
         owner_id: matchedOwnerId,
         farmerId: matchedFarmerId,
+        farmerName: farmer.name || '',
         status: 'PLACED',
         paymentMethod: paymentMethod || 'COD',
         paymentStatus: paymentStatus || (paymentMethod === 'ONLINE' ? 'PAID' : 'PENDING'),
