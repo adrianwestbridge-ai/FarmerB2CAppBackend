@@ -89,6 +89,20 @@ const adminOnly = (req, res, next) => {
 };
 
 /**
+ * Super Admin only access
+ */
+const superAdminOnly = (req, res, next) => {
+  if (req.user && req.user.role === "SUPER_ADMIN") {
+    next();
+  } else {
+    return res.status(403).json({
+      success: false,
+      message: "Only the Super Admin can perform this action",
+    });
+  }
+};
+
+/**
  * Farmer only access
  */
 const farmerOnly = (req, res, next) => {
@@ -119,6 +133,7 @@ const partnerOnly = (req, res, next) => {
 module.exports = {
   protect,
   adminOnly,
+  superAdminOnly,
   farmerOnly,
   partnerOnly,
 };

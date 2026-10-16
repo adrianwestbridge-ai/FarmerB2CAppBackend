@@ -18,8 +18,9 @@ const farmerSchema = new mongoose.Schema({
   coverImageUrl: { type: String, default: 'https://imgs.search.brave.com/GHtnziceWoATyIUqfUx7UI0jSOiDlj8G4WrPR6O8e0s/rs:fit:860:0:0:0/g:ce/aHR0cHM6Ly9pbWcu/bWFnbmlmaWMuY29t/L3ByZW1pdW0tcGhv/dG8vY2xvc2UtdXAt/YWdyaWN1bHR1cmUt/c2NlbmVyeS1maWVs/ZC13aGVhdC1maWVs/ZC1mYXJtaW5nLWJh/Y2tncm91bmRfMTc5/OTM1LTYzMTA4Lmpw/Zz9zZW10PWFpc190/ZXN0X2Imdz03NDAm/cT04MA' },
   password: { type: String }, // Hashed password
   status: { type: String, default: 'Active', enum: ['Active', 'Suspended', 'Pending'] },
-}, { 
-  timestamps: true 
+  createdBy: { type: String, default: null },
+}, {
+  timestamps: true
 });
 
 // Hash password before saving if modified

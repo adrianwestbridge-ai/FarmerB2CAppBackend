@@ -35,9 +35,13 @@ exports.createPartner = async (req, res) => {
       serviceArea: serviceArea || '',
       addressLine: addressLine || '',
       password: password || '123456',
+      createdBy: req.user.owner_id,
     });
 
-    res.status(201).json({ success: true, data: partner });
+    const partnerData = partner.toObject();
+    delete partnerData.password;
+
+    res.status(201).json({ success: true, data: partnerData });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }

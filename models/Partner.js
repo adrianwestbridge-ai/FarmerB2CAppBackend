@@ -16,8 +16,9 @@ const partnerSchema = new mongoose.Schema({
   vehicleName: { type: String, default: 'Mahindra Pickup' },
   vehicleNumber: { type: String, default: 'UP 70 AB 1234' },
   status: { type: String, default: 'Active', enum: ['Active', 'Suspended', 'Pending'] },
-}, { 
-  timestamps: true 
+  createdBy: { type: String, default: null },
+}, {
+  timestamps: true
 });
 
 partnerSchema.pre('save', async function(next) {

@@ -21,6 +21,13 @@ exports.createAdmin = async (req, res) => {
       return res.status(400).json({ success: false, message: 'username, password, and name are required' });
     }
 
+    if (role === 'SUPER_ADMIN') {
+      return res.status(400).json({ success: false, message: 'Cannot create another Super Admin — only one is allowed' });
+    }
+    if (!['ADMIN', 'MODERATOR'].includes(role)) {
+      return res.status(400).json({ success: false, message: 'role must be ADMIN or MODERATOR' });
+    }
+
     const existing = await Admin.findOne({ username });
     if (existing) {
       return res.status(400).json({ success: false, message: 'Username already in use' });
@@ -33,9 +40,13 @@ exports.createAdmin = async (req, res) => {
       name,
       role,
       status: 'Verified',
+      createdBy: req.user.owner_id,
     });
 
-    res.status(201).json({ success: true, data: admin });
+    const adminData = admin.toObject();
+    delete adminData.password;
+
+    res.status(201).json({ success: true, data: adminData });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }

@@ -14,12 +14,15 @@ exports.createOrder = async (req, res) => {
       owner_id: reqOwnerId,
       items = [],
       totalAmount,
+      taxRate = 0,
       deliveryAddress,
       paymentMethod = 'COD',
       paymentStatus = 'PENDING',
       paymentReference = '',
       trackingNote = '',
     } = body;
+
+    const safeTaxRate = Math.max(0, Number(taxRate) || 0);
 
     const inputFarmerId = reqFarmerId || (req.user ? req.user._id.toString() : null);
     const inputOwnerId = reqOwnerId || (req.user ? req.user.owner_id : null) || inputFarmerId;
@@ -93,12 +96,13 @@ exports.createOrder = async (req, res) => {
 
       const prodImg = prod ? (prod.imageUrls?.[0] || prod.images?.[0] || image || productImage || '') : (image || productImage || '');
       const finalProductName = prod ? prod.name : (productName || item.name || 'Agri Product');
-      const itemTotal = Number((itemPrice * qty).toFixed(2));
+      const itemTotal = Number((itemPrice * qty * (1 + safeTaxRate)).toFixed(2));
 
       const newOrder = await Order.create({
         owner_id: matchedOwnerId,
         farmerId: matchedFarmerId,
         farmerName: farmer.name || '',
+        farmerPhone: farmer.phoneNumber || '',
         status: 'PLACED',
         paymentMethod: paymentMethod || 'COD',
         paymentStatus: paymentStatus || (paymentMethod === 'ONLINE' ? 'PAID' : 'PENDING'),
@@ -138,7 +142,7 @@ exports.createOrder = async (req, res) => {
 exports.getOrders = async (req, res) => {
   try {
     const query = req.query || {};
-    const { farmerId, owner_id, status } = query;
+    const { farmerId, owner_id, status, assignedPartnerId } = query;
     let filter = {};
 
     // Strict User Isolation for Farmers
@@ -152,6 +156,7 @@ exports.getOrders = async (req, res) => {
     }
 
     if (status) filter.status = status;
+    if (assignedPartnerId) filter.assignedPartnerId = assignedPartnerId;
 
     const orders = await Order.find(filter)
       .populate('productId')

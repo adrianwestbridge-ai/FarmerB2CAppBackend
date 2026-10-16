@@ -12,7 +12,7 @@ const {
   forgotPasswordCheck,
   forgotPasswordReset,
 } = require('../controllers/authController');
-const { protect } = require('../middleware/authMiddleware');
+const { protect, adminOnly } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
@@ -26,7 +26,7 @@ router.post('/partner/login', loginPartner);
 router.get('/me', protect, getMe);
 router.put('/me', protect, updateMe);
 router.put('/update-password', protect, updatePassword);
-router.get('/all-users', getAllUsers);
+router.get('/all-users', protect, adminOnly, getAllUsers);
 
 
 module.exports = router;

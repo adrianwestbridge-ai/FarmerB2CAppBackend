@@ -28,7 +28,8 @@ const orderSchema = new mongoose.Schema({
   productName: { type: String, default: '' },
   productImage: { type: String, default: '' },
   farmerName: { type: String, default: '' },
-}, { 
+  farmerPhone: { type: String, default: '' },
+}, {
   timestamps: true 
 });
 

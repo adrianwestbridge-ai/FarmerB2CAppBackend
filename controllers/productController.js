@@ -4,9 +4,17 @@ const Product = require('../models/Product.js');
 // @route   GET /api/products
 exports.getProducts = async (req, res) => {
   try {
-    const { category, categoryId, search, isFeatured, limit = 50, page = 1 } = req.query;
+    const { category, categoryId, search, isFeatured, includeInactive, isActive, limit = 50, page = 1 } = req.query;
 
-    let filter = { isActive: true };
+    let filter = {};
+    if (isActive === 'true') {
+      filter.isActive = true;
+    } else if (isActive === 'false') {
+      filter.isActive = false;
+    } else if (includeInactive !== 'true') {
+      filter.isActive = true;
+    }
+    // else: includeInactive=true with no explicit isActive -> return both active and inactive
 
     const selectedCategory = categoryId || category;
     if (selectedCategory) {

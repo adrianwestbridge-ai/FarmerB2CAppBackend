@@ -4,11 +4,12 @@ const {
   createPartner,
   updatePartner,
 } = require('../controllers/partnerController');
+const { protect, adminOnly } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
 router.get('/', getPartners);
-router.post('/', createPartner);
+router.post('/', protect, adminOnly, createPartner);
 router.put('/:id', updatePartner);
 
 module.exports = router;
