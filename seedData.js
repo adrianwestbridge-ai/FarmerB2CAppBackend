@@ -11,6 +11,62 @@ const CartItem = require('./models/CartItem');
 const Order = require('./models/Order');
 const Review = require('./models/Review');
 const FarmerVisit = require('./models/FarmerVisit');
+const Offer = require('./models/Offer');
+const Settlement = require('./models/Settlement');
+const PasswordResetRequest = require('./models/PasswordResetRequest');
+const Setting = require('./models/Setting');
+const { Counter } = require('./models/Counter');
+const { DEFAULT_PERMISSIONS } = require('./utils/permissions');
+
+// Hindi product names, in the same order as productsData below.
+const PRODUCT_NAMES_HI = [
+  'पूसा बासमती 1509 हाइब्रिड धान बीज',
+  'सिंजेंटा S7001 टमाटर F1 हाइब्रिड बीज (10 ग्राम)',
+  'महिको 735 BG-II बीटी कपास बीज (475 ग्राम पैकेट)',
+  'सेमिनिस F1 हाइब्रिड मिर्च तेजा-4 बीज (10 ग्राम)',
+  'DKC 9108 पायनियर हाइब्रिड मक्का बीज (4 किग्रा)',
+  'VNR शुगर-77 हाइब्रिड तरबूज बीज (50 ग्राम)',
+  'इफको NPK 19:19:19 पानी में घुलनशील उर्वरक (1 किग्रा)',
+  'कोरोमंडल DAP स्पेशल 18:46:0 उर्वरक (50 किग्रा बैग)',
+  'ह्यूमिक एसिड 98% पोटेशियम ह्यूमेट दाने (1 किग्रा)',
+  'महाधन सल्फेट ऑफ पोटाश SOP 0:0:50 (1 किग्रा)',
+  'चिलेटेड जिंक EDTA 12% सूक्ष्म पोषक तत्व (500 ग्राम)',
+  'बायो-ज़ाइम समुद्री शैवाल अर्क वृद्धि प्रवर्धक (500 मिली)',
+  'बायर कॉन्फिडोर इमिडाक्लोप्रिड 17.8% SL कीटनाशक (250 मिली)',
+  'सिंजेंटा एमिस्टार टॉप फफूंदनाशक (250 मिली)',
+  'UPL साफ कार्बेन्डाजिम + मैंकोजेब फफूंदनाशक (500 ग्राम)',
+  'राउंडअप ग्लाइफोसेट 41% SL खरपतवारनाशक (1 लीटर)',
+  'नीमिक्स 10000 PPM शुद्ध नीम तेल स्प्रे (1 लीटर)',
+  'कॉपर ऑक्सीक्लोराइड 50% WP ब्लाइटॉक्स फफूंदनाशक (500 ग्राम)',
+  'ASPEE 16 लीटर बैटरी चालित नैपसैक स्प्रेयर',
+  'डिजिटल 4-इन-1 मिट्टी pH, नमी, धूप व तापमान मीटर',
+  'सोलर स्वचालित कीट जाल (UV LED व बैटरी सहित)',
+  'जापानी स्टील प्रोफेशनल छंटाई कैंची',
+  'मज़बूत हाथ की खुरपी (निराई उपकरण)',
+  '50 मीटर मज़बूत 3-परत PVC पाइप (3/4 इंच)',
+  'ट्राइकोडर्मा विरिडी जैव-फफूंदनाशक पाउडर (1 किग्रा)',
+  'प्रोमिक्स 100% जैविक केंचुआ खाद (50 किग्रा बैग)',
+  'एज़ोस्पिरिलम जैव-उर्वरक नाइट्रोजन स्थिरीकरण तरल (1 लीटर)',
+  'जैन ड्रिप सिंचाई स्टार्टर किट (1/2 एकड़)',
+  'पीतल इम्पैक्ट स्प्रिंकलर 1/2 इंच नोज़ल (4 का पैक)',
+  'डिस्क फ़िल्टर 2 इंच 120 मेश (ड्रिप लाइन हेतु)',
+];
+
+// Pack size from the product title, e.g. "(500ml)" → 500 ml, "(50kg Bag)" → 50 kg.
+const packSize = (name) => {
+  const m = /\((\d+(?:\.\d+)?)\s*(kg|g|ml|L)\b/i.exec(name);
+  if (!m) return { unit: /seed/i.test(name) ? 'kg' : 'piece', unitQuantity: 1 };
+  const unit = { kg: 'kg', g: 'g', ml: 'ml', l: 'L' }[m[2].toLowerCase()];
+  return { unit, unitQuantity: Number(m[1]) };
+};
+
+// Legacy seed rows carry `price` (MRP) and `discountPercent`; convert to MRP + selling price.
+const toPricedProduct = (p, index) => {
+  const { discountPercent = 0, ...rest } = p;
+  const mrp = p.price;
+  const price = Math.round(mrp * (1 - discountPercent / 100));
+  return { ...rest, mrp, price, nameHi: PRODUCT_NAMES_HI[index] || '', ...packSize(p.name) };
+};
 
 const seedData = async () => {
   try {
@@ -28,6 +84,13 @@ const seedData = async () => {
       Order.deleteMany({}),
       Review.deleteMany({}),
       FarmerVisit.deleteMany({}),
+      Offer.deleteMany({}),
+      Settlement.deleteMany({}),
+      PasswordResetRequest.deleteMany({}),
+      Setting.deleteMany({}),
+      Counter.deleteMany({}),
+      // Audit logs are immutable through the model; a full dev reseed clears the raw collection.
+      mongoose.connection.db.collection('auditlogs').deleteMany({}),
     ]);
 
     // ─── 1. SEED ADMINS ────────────────────────────────────────────────────────
@@ -39,7 +102,7 @@ const seedData = async () => {
         password: 'Admin@123',
         name: 'Super Administrator',
         role: 'SUPER_ADMIN',
-        status: 'Verified',
+        status: 'Active',
       },
       {
         owner_id: 'admin_002',
@@ -47,7 +110,18 @@ const seedData = async () => {
         password: 'Mod@123',
         name: 'Agricultural Moderator',
         role: 'MODERATOR',
-        status: 'Verified',
+        permissions: DEFAULT_PERMISSIONS.MODERATOR,
+        status: 'Active',
+      },
+      {
+        owner_id: 'admin_003',
+        username: 'ops_admin',
+        password: 'Ops@1234',
+        name: 'Operations Admin',
+        phoneNumber: '9811122233',
+        role: 'ADMIN',
+        permissions: DEFAULT_PERMISSIONS.ADMIN,
+        status: 'Active',
       },
     ]);
 
@@ -833,7 +907,7 @@ const seedData = async () => {
       },
     ];
 
-    const seededProducts = await Product.create(productsData);
+    const seededProducts = await Product.create(productsData.map(toPricedProduct));
     console.log(`✅ Successfully seeded ${seededProducts.length} Products!`);
 
     // ─── 6. SEED CART ITEMS ───────────────────────────────────────────────────
@@ -857,64 +931,72 @@ const seedData = async () => {
       },
     ]);
 
-    // ─── 7. SEED SINGLE PRODUCT ORDERS ────────────────────────────────────────
-    console.log('📦 Seeding Single-Product Orders...');
-    const partnerCourier = partners[0];
-    await Order.create([
+    // ─── 7. SEED SETTINGS & OFFERS ────────────────────────────────────────────
+    // Orders are not seeded: they must go through the real placement → approval → delivery
+    // workflow so that pricing, stock, history and audit records are consistent.
+    console.log('⚙️ Seeding settings and offers...');
+    await Setting.create({
+      key: 'global',
+      deliveryFee: 50,
+      freeDeliveryAbove: 0,
+      upiId: 'agriharvest@upi',
+      upiPayeeName: 'AgriHarvest Agro Pvt Ltd',
+      paymentInstructions: 'Pay the exact total to the UPI ID above, then enter the UPI transaction reference (UTR) number.',
+      paymentInstructionsHi: 'ऊपर दी गई UPI ID पर पूरी राशि का भुगतान करें, फिर UPI लेनदेन संदर्भ (UTR) संख्या दर्ज करें।',
+    });
+
+    const day = 24 * 3600 * 1000;
+    const now = Date.now();
+    const superAdmin = admins[0];
+    await Offer.create([
       {
-        owner_id: demoFarmer.owner_id,
-        farmerId: demoFarmer._id.toString(),
-        farmerName: demoFarmer.name,
-        productId: seededProducts[0]._id, // Basmati Seeds
-        productName: seededProducts[0].name,
-        productImage: seededProducts[0].images[0],
-        quantity: 2,
-        price: seededProducts[0].price,
-        totalAmount: seededProducts[0].price * 2,
-        deliveryAddress: `${demoFarmer.addressLine}, ${demoFarmer.village}, ${demoFarmer.district}`,
-        status: 'PLACED',
-        paymentMethod: 'COD',
-        paymentStatus: 'PENDING',
-        trackingNote: 'Order placed successfully. Waiting for partner assignment.',
+        title: 'Kharif Seed Sale – 10% off',
+        titleHi: 'खरीफ बीज सेल – 10% छूट',
+        description: 'Extra 10% off on selected hybrid seeds.',
+        descriptionHi: 'चुनिंदा हाइब्रिड बीजों पर अतिरिक्त 10% छूट।',
+        discountType: 'PERCENT',
+        discountValue: 10,
+        products: [seededProducts[0]._id, seededProducts[1]._id, seededProducts[3]._id],
+        startDate: new Date(now - 2 * day),
+        endDate: new Date(now + 30 * day),
+        createdBy: String(superAdmin._id),
+        createdByName: superAdmin.name,
       },
       {
-        owner_id: demoFarmer.owner_id,
-        farmerId: demoFarmer._id.toString(),
-        farmerName: demoFarmer.name,
-        productId: seededProducts[6]._id, // IFFCO NPK
-        productName: seededProducts[6].name,
-        productImage: seededProducts[6].images[0],
-        quantity: 3,
-        price: seededProducts[6].price,
-        totalAmount: seededProducts[6].price * 3,
-        deliveryAddress: `${demoFarmer.addressLine}, ${demoFarmer.village}, ${demoFarmer.district}`,
-        status: 'SHIPPED',
-        paymentMethod: 'ONLINE',
-        paymentStatus: 'PAID',
-        assignedPartnerId: partnerCourier._id,
-        assignedPartnerName: partnerCourier.name,
-        assignedPartnerPhone: partnerCourier.phoneNumber,
-        trackingNote: 'Out for delivery via partner courier.',
+        title: '₹25 off Fertilizers (min ₹500 order)',
+        titleHi: 'उर्वरकों पर ₹25 छूट (न्यूनतम ₹500 ऑर्डर)',
+        description: 'Flat ₹25 off per pack when your cart is ₹500 or more.',
+        descriptionHi: '₹500 या अधिक की कार्ट पर प्रति पैक ₹25 की छूट।',
+        discountType: 'FIXED',
+        discountValue: 25,
+        minPurchaseAmount: 500,
+        products: [seededProducts[6]._id, seededProducts[8]._id],
+        startDate: new Date(now - day),
+        endDate: new Date(now + 15 * day),
+        createdBy: String(superAdmin._id),
+        createdByName: superAdmin.name,
       },
       {
-        owner_id: demoFarmer.owner_id,
-        farmerId: demoFarmer._id.toString(),
-        farmerName: demoFarmer.name,
-        productId: seededProducts[18]._id, // Sprayer
-        productName: seededProducts[18].name,
-        productImage: seededProducts[18].images[0],
-        quantity: 1,
-        price: seededProducts[18].price,
-        totalAmount: seededProducts[18].price * 1,
-        deliveryAddress: `${demoFarmer.addressLine}, ${demoFarmer.village}, ${demoFarmer.district}`,
-        status: 'DELIVERED',
-        paymentMethod: 'ONLINE',
-        paymentStatus: 'PAID',
-        assignedPartnerId: partnerCourier._id,
-        assignedPartnerName: partnerCourier.name,
-        assignedPartnerPhone: partnerCourier.phoneNumber,
-        deliveryProofUrl: 'https://images.unsplash.com/photo-1595858603612-53b754383a15?w=400&q=80',
-        trackingNote: 'Order delivered successfully to farmer.',
+        title: 'Sprayer Festival Offer',
+        titleHi: 'स्प्रेयर त्योहार ऑफ़र',
+        discountType: 'PERCENT',
+        discountValue: 15,
+        products: [seededProducts[18]._id],
+        startDate: new Date(now + 5 * day),
+        endDate: new Date(now + 20 * day),
+        createdBy: String(superAdmin._id),
+        createdByName: superAdmin.name,
+      },
+      {
+        title: 'Monsoon Pesticide Offer (expired)',
+        titleHi: 'मानसून कीटनाशक ऑफ़र (समाप्त)',
+        discountType: 'PERCENT',
+        discountValue: 12,
+        products: [seededProducts[12]._id],
+        startDate: new Date(now - 40 * day),
+        endDate: new Date(now - 10 * day),
+        createdBy: String(superAdmin._id),
+        createdByName: superAdmin.name,
       },
     ]);
 
@@ -999,7 +1081,9 @@ const seedData = async () => {
     console.log('🔑 TEST CREDENTIALS:');
     console.log('Farmer Demo Phone    : 9999999999 (Password: 123456)');
     console.log('Farmer Demo Username : ramesh_patel (Password: 123456)');
-    console.log('Admin Username    : admin_username (Password: Admin@123)');
+    console.log('Super Admin       : admin_username (Password: Admin@123)');
+    console.log('Admin             : ops_admin (Password: Ops@1234)');
+    console.log('Moderator         : mod_username (Password: Mod@123)');
     console.log('Partner Phone     : 9888877777 (Password: 123456)');
     console.log('----------------------------------------------------');
 

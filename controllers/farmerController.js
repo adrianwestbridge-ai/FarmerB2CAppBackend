@@ -1,134 +1,115 @@
 const Farmer = require('../models/Farmer');
+const { AppError, t } = require('../utils/i18n');
+const { audit } = require('../utils/audit');
+const { requireValidId, escapeRegex, cleanText, normalizePhone } = require('../utils/validators');
+const { assertUsername, assertPhone, assertPassword } = require('../utils/identity');
 
-// @desc    Get all farmers
-// @route   GET /api/farmers
+// @route GET /api/farmers?search&status&page&limit  (admin)
 exports.getFarmers = async (req, res) => {
-  try {
-    const { search, limit = 50, page = 1 } = req.query;
-    let filter = {};
-
-    if (search) {
-      filter.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { phoneNumber: { $regex: search, $options: 'i' } },
-        { village: { $regex: search, $options: 'i' } },
-        { district: { $regex: search, $options: 'i' } },
-      ];
-    }
-
-    const skip = (page - 1) * limit;
-    const farmers = await Farmer.find(filter)
-      .select('-password')
-      .sort({ createdAt: -1 })
-      .skip(Number(skip))
-      .limit(Number(limit));
-
-    const total = await Farmer.countDocuments(filter);
-
-    res.status(200).json({
-      success: true,
-      count: farmers.length,
-      total,
-      data: farmers,
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 100));
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const filter = {};
+  if (req.query.status && ['Active', 'Suspended', 'Pending'].includes(req.query.status)) filter.status = req.query.status;
+  if (req.query.search) {
+    const rx = new RegExp(escapeRegex(cleanText(req.query.search, 60)), 'i');
+    filter.$or = [{ name: rx }, { phoneNumber: rx }, { username: rx }, { village: rx }, { district: rx }];
   }
+  const [farmers, total] = await Promise.all([
+    Farmer.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit),
+    Farmer.countDocuments(filter),
+  ]);
+  res.status(200).json({ success: true, count: farmers.length, total, data: farmers });
 };
 
-// @desc    Create new Farmer (Admin only)
-// @route   POST /api/farmers
-exports.createFarmer = async (req, res) => {
-  try {
-    const { name, phoneNumber, username, password } = req.body;
-
-    if (!phoneNumber) {
-      return res.status(400).json({ success: false, message: 'Phone number is required' });
-    }
-    if (!username) {
-      return res.status(400).json({ success: false, message: 'Username is required' });
-    }
-
-    const normalizedUsername = String(username).trim().toLowerCase();
-    if (!/^[a-z0-9_]{3,20}$/.test(normalizedUsername)) {
-      return res.status(400).json({ success: false, message: 'Username must be 3-20 characters and contain only lowercase letters, numbers, and underscores' });
-    }
-
-    const existingFarmer = await Farmer.findOne({ phoneNumber });
-    if (existingFarmer) {
-      return res.status(400).json({ success: false, message: 'Farmer already registered with this phone number' });
-    }
-
-    const existingUsername = await Farmer.findOne({ username: normalizedUsername });
-    if (existingUsername) {
-      return res.status(400).json({ success: false, message: 'Username already exists' });
-    }
-
-    const farmer = await Farmer.create({
-      owner_id: `farmer_${Date.now()}`,
-      phoneNumber,
-      username: normalizedUsername,
-      name: name || '',
-      password: password || '123456',
-      createdBy: req.user.owner_id,
-    });
-
-    const farmerData = farmer.toObject();
-    delete farmerData.password;
-
-    res.status(201).json({ success: true, data: farmerData });
-  } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
-  }
-};
-
-// @desc    Get single farmer profile
-// @route   GET /api/farmers/:id
+// @route GET /api/farmers/:id  (admin)
 exports.getFarmerById = async (req, res) => {
-  try {
-    const farmer = await Farmer.findById(req.params.id).select('-password');
-    if (!farmer) {
-      return res.status(404).json({ success: false, message: 'Farmer not found' });
-    }
-    res.status(200).json({ success: true, data: farmer });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+  const farmer = await Farmer.findById(requireValidId(req.params.id));
+  if (!farmer) throw new AppError(404, 'USER_NOT_FOUND');
+  res.status(200).json({ success: true, data: farmer });
 };
 
-// @desc    Update farmer profile
-// @route   PUT /api/farmers/:id
+// @route POST /api/farmers  (admin)
+exports.createFarmer = async (req, res) => {
+  const body = req.body || {};
+  const phoneNumber = await assertPhone(body.phoneNumber);
+  const username = await assertUsername(body.username);
+  const password = assertPassword(body.password, body.confirmPassword);
+  const name = cleanText(body.name, 100);
+  if (!name) throw new AppError(400, 'NAME_REQUIRED');
+
+  const farmer = await Farmer.create({
+    owner_id: `farmer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    phoneNumber,
+    username,
+    name,
+    password,
+    addressLine: cleanText(body.addressLine, 300),
+    village: cleanText(body.village, 100),
+    district: cleanText(body.district, 100),
+    state: cleanText(body.state, 100),
+    pincode: cleanText(body.pincode, 10),
+    createdBy: String(req.user._id),
+  });
+  await audit(req, { action: 'FARMER_CREATED', entityType: 'FARMER', entityId: farmer._id, entityRef: username, toStatus: 'Active' });
+  res.status(201).json({ success: true, data: farmer });
+};
+
+// @route PUT /api/farmers/:id  (admin) — profile fields only
 exports.updateFarmer = async (req, res) => {
-  try {
-    const farmer = await Farmer.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-      runValidators: true,
-    }).select('-password');
-
-    if (!farmer) {
-      return res.status(404).json({ success: false, message: 'Farmer not found' });
-    }
-
-    res.status(200).json({ success: true, data: farmer });
-  } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+  const farmer = await Farmer.findById(requireValidId(req.params.id));
+  if (!farmer) throw new AppError(404, 'USER_NOT_FOUND');
+  const body = req.body || {};
+  if (body.name !== undefined) {
+    const name = cleanText(body.name, 100);
+    if (!name) throw new AppError(400, 'NAME_REQUIRED');
+    farmer.name = name;
   }
+  if (body.phoneNumber !== undefined && normalizePhone(body.phoneNumber) !== farmer.phoneNumber) {
+    farmer.phoneNumber = await assertPhone(body.phoneNumber, { exclude: { type: 'farmer', id: farmer._id } });
+  }
+  ['addressLine', 'village', 'district', 'state', 'pincode', 'cropType', 'language'].forEach((f) => {
+    if (body[f] !== undefined) farmer[f] = cleanText(body[f], f === 'addressLine' ? 300 : 100);
+  });
+  await farmer.save();
+  await audit(req, { action: 'FARMER_UPDATED', entityType: 'FARMER', entityId: farmer._id, entityRef: farmer.username || farmer.phoneNumber });
+  res.status(200).json({ success: true, data: farmer });
 };
 
-// @desc    Delete/Deactivate farmer
-// @route   DELETE /api/farmers/:id
-exports.deleteFarmer = async (req, res) => {
-  try {
-    const farmer = await Farmer.findByIdAndUpdate(
-      req.params.id,
-      { status: 'Suspended' },
-      { new: true }
-    );
-    if (!farmer) {
-      return res.status(404).json({ success: false, message: 'Farmer not found' });
-    }
-    res.status(200).json({ success: true, message: 'Farmer status updated to Suspended' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+// @route PATCH /api/farmers/:id/status  { status: 'Active' | 'Suspended', reason }
+exports.setFarmerStatus = async (req, res) => {
+  const farmer = await Farmer.findById(requireValidId(req.params.id));
+  if (!farmer) throw new AppError(404, 'USER_NOT_FOUND');
+  const status = (req.body || {}).status;
+  if (!['Active', 'Suspended'].includes(status)) throw new AppError(400, 'STATUS_INVALID');
+  const from = farmer.status;
+  if (from !== status) {
+    farmer.status = status;
+    if (status === 'Suspended') farmer.tokenVersion = (farmer.tokenVersion || 0) + 1;
+    await farmer.save();
+    await audit(req, {
+      action: status === 'Active' ? 'FARMER_ACTIVATED' : 'FARMER_SUSPENDED',
+      entityType: 'FARMER',
+      entityId: farmer._id,
+      entityRef: farmer.username || farmer.phoneNumber,
+      fromStatus: from,
+      toStatus: status,
+      reason: cleanText((req.body || {}).reason, 300),
+    });
   }
+  res.status(200).json({ success: true, data: farmer });
+};
+
+// @route PATCH /api/farmers/:id/password  { newPassword, confirmPassword }
+exports.resetFarmerPassword = async (req, res) => {
+  const farmer = await Farmer.findById(requireValidId(req.params.id));
+  if (!farmer) throw new AppError(404, 'USER_NOT_FOUND');
+  const { newPassword, confirmPassword } = req.body || {};
+  assertPassword(newPassword, confirmPassword);
+  farmer.password = newPassword;
+  farmer.tokenVersion = (farmer.tokenVersion || 0) + 1;
+  farmer.failedLoginAttempts = 0;
+  farmer.lockUntil = null;
+  await farmer.save();
+  await audit(req, { action: 'PASSWORD_RESET_BY_ADMIN', entityType: 'FARMER', entityId: farmer._id, entityRef: farmer.username || farmer.phoneNumber });
+  res.status(200).json({ success: true, message: t(req, 'PASSWORD_RESET_DONE') });
 };

@@ -1,33 +1,37 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const {
+  login,
   registerFarmer,
-  loginFarmer,
-  loginAdmin,
-  loginPartner,
   getMe,
   updateMe,
   updatePassword,
-  getAllUsers,
   checkUsernameAvailability,
-  forgotPasswordCheck,
-  forgotPasswordReset,
+  requestPasswordReset,
 } = require('../controllers/authController');
-const { protect, adminOnly } = require('../middleware/authMiddleware');
+const { protect } = require('../middleware/authMiddleware');
+const { t } = require('../utils/i18n');
 
 const router = express.Router();
 
-router.get('/check-username', checkUsernameAvailability);
-router.post('/forgot-password/check', forgotPasswordCheck);
-router.post('/forgot-password/reset', forgotPasswordReset);
-router.post('/register', registerFarmer);
-router.post('/login', loginFarmer);
-router.post('/admin/login', loginAdmin);
-router.post('/partner/login', loginPartner);
+// Per-IP throttles on credential endpoints (per-account lockout is enforced in the controller).
+// AUTH_RATE_LIMIT_MULTIPLIER lets automated test environments raise every limit at once.
+const multiplier = Math.max(1, Number(process.env.AUTH_RATE_LIMIT_MULTIPLIER) || 1);
+const limiter = (max, windowMinutes) => rateLimit({
+  windowMs: windowMinutes * 60 * 1000,
+  max: max * multiplier,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => res.status(429).json({ success: false, code: 'TOO_MANY_REQUESTS', message: t(req, 'TOO_MANY_REQUESTS') }),
+});
+
+router.post('/login', limiter(20, 15), login);
+router.post('/register', limiter(10, 60), registerFarmer);
+router.post('/forgot-password', limiter(5, 60), requestPasswordReset);
+router.get('/check-username', limiter(60, 15), checkUsernameAvailability);
+
 router.get('/me', protect, getMe);
 router.put('/me', protect, updateMe);
-router.put('/update-password', protect, updatePassword);
-router.get('/all-users', protect, adminOnly, getAllUsers);
-
+router.put('/update-password', protect, limiter(10, 15), updatePassword);
 
 module.exports = router;
-

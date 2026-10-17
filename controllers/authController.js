@@ -1,621 +1,276 @@
-const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
 const Farmer = require('../models/Farmer');
 const Admin = require('../models/Admin');
 const Partner = require('../models/Partner');
+const Order = require('../models/Order');
+const PasswordResetRequest = require('../models/PasswordResetRequest');
+const { signToken, effectivePermissions } = require('../middleware/authMiddleware');
+const { t, AppError } = require('../utils/i18n');
+const { audit } = require('../utils/audit');
+const { getSettings } = require('../utils/settings');
+const { normalizePhone, isValidPhone, normalizeUsername, isValidUsername, cleanText } = require('../utils/validators');
+const { assertUsername, assertPhone, assertPassword, isUsernameTaken } = require('../utils/identity');
+const { releaseOrdersOfPartner } = require('../services/orderService');
 
-const generateToken = (id, userType, role) => {
-  const secret = process.env.JWT_SECRET;
-  if (!secret) throw new Error("JWT_SECRET is not set");
-  return jwt.sign({ id, userType, role }, secret, {
-    expiresIn: '30d',
-  });
-};
+// A real bcrypt hash used to keep the response time of "unknown user" equal to "wrong password".
+const DUMMY_HASH = bcrypt.hashSync('timing-equalizer-not-a-password', 10);
 
-// Unified lookup across Farmer/Admin/Partner by phone, owner_id, or username - mirrors loginFarmer's matching rules
-const findUnifiedUser = async (identifier) => {
-  const normalizedUsername = String(identifier).trim().toLowerCase();
+const sessionPayload = (user, userType, token) => ({
+  success: true,
+  token,
+  userType,
+  data: user.toJSON(),
+  permissions: userType === 'admin' ? effectivePermissions(user) : [],
+});
 
-  const farmer = await Farmer.findOne({
-    $or: [
-      { phoneNumber: identifier },
-      { owner_id: identifier },
-      { username: normalizedUsername },
-    ],
-  });
-  if (farmer) return { user: farmer, userType: 'farmer' };
+// Collect every account the identifier could refer to, honouring the configured login method.
+// Admins always log in with their username.
+const findLoginCandidates = async (identifier, loginMethod) => {
+  const phone = normalizePhone(identifier);
+  const looksLikePhone = isValidPhone(phone);
+  const username = normalizeUsername(identifier);
+  const allowMobile = loginMethod !== 'USERNAME';
+  const allowUsername = loginMethod !== 'MOBILE';
 
-  const admin = await Admin.findOne({
-    $or: [
-      { username: identifier },
-      { owner_id: identifier },
-    ],
-  });
-  if (admin) return { user: admin, userType: 'admin' };
-
-  const partner = await Partner.findOne({
-    $or: [
-      { phoneNumber: identifier },
-      { owner_id: identifier },
-    ],
-  });
-  if (partner) return { user: partner, userType: 'partner' };
-
-  return null;
-};
-
-// @desc    Register a new Farmer
-// @route   POST /api/auth/register
-exports.registerFarmer = async (req, res) => {
-  try {
-    const {
-      phoneNumber,
-      username,
-      name,
-      language,
-      cropType,
-      landSizeAcres,
-      addressLine,
-      village,
-      district,
-      state,
-      pincode,
-      password,
-    } = req.body;
-
-    if (!phoneNumber) {
-      return res.status(400).json({ success: false, message: 'Phone number is required' });
-    }
-
-    if (!username) {
-      return res.status(400).json({ success: false, message: 'Username is required' });
-    }
-
-    const normalizedUsername = String(username).trim().toLowerCase();
-    if (!/^[a-z0-9_]{3,20}$/.test(normalizedUsername)) {
-      return res.status(400).json({ success: false, message: 'Username must be 3-20 characters and contain only lowercase letters, numbers, and underscores' });
-    }
-
-    const existingFarmer = await Farmer.findOne({ phoneNumber });
-    if (existingFarmer) {
-      return res.status(400).json({ success: false, message: 'Farmer already registered with this phone number' });
-    }
-
-    const existingUsername = await Farmer.findOne({ username: normalizedUsername });
-    if (existingUsername) {
-      return res.status(400).json({ success: false, message: 'Username already exists' });
-    }
-
-    const owner_id = `farmer_${Date.now()}`;
-    const farmer = await Farmer.create({
-      owner_id,
-      phoneNumber,
-      username: normalizedUsername,
-      name: name || '',
-      language: language || 'English',
-      cropType: cropType || '',
-      landSizeAcres: landSizeAcres ? Number(landSizeAcres) : 0,
-      addressLine: addressLine || '',
-      village: village || '',
-      district: district || '',
-      state: state || '',
-      pincode: pincode || '',
-      password: password || '123456',
-    });
-
-    const token = generateToken(farmer._id, 'farmer', 'FARMER');
-
-    res.status(201).json({
-      success: true,
-      token,
-      data: farmer,
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+  const queries = [];
+  if (allowMobile && looksLikePhone) {
+    queries.push(Farmer.findOne({ phoneNumber: phone }).then((u) => u && { user: u, userType: 'farmer' }));
+    queries.push(Partner.findOne({ phoneNumber: phone }).then((u) => u && { user: u, userType: 'partner' }));
   }
+  if (allowUsername && isValidUsername(username)) {
+    queries.push(Farmer.findOne({ username }).then((u) => u && { user: u, userType: 'farmer' }));
+    queries.push(Partner.findOne({ username }).then((u) => u && { user: u, userType: 'partner' }));
+  }
+  if (isValidUsername(username)) {
+    queries.push(Admin.findOne({ username }).then((u) => u && { user: u, userType: 'admin' }));
+  }
+  const results = (await Promise.all(queries)).filter(Boolean);
+  const seen = new Set();
+  return results.filter((c) => {
+    const key = `${c.userType}:${c.user._id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 };
 
-// @desc    Unified User/Farmer/Admin/Partner Login
 // @route   POST /api/auth/login
-exports.loginFarmer = async (req, res) => {
-  try {
-    const { phoneNumber, password, owner_id, userId, username } = req.body;
-    const identifier = phoneNumber || owner_id || userId || username;
+// @body    { identifier, password }  (legacy: username / phoneNumber)
+exports.login = async (req, res) => {
+  const body = req.body || {};
+  const identifier = cleanText(body.identifier || body.username || body.phoneNumber || '', 100);
+  const password = typeof body.password === 'string' ? body.password : '';
 
-    if (!identifier) {
-      return res.status(400).json({ success: false, message: 'User ID, phone number or owner_id is required' });
+  if (!identifier) throw new AppError(400, 'AUTH_IDENTIFIER_REQUIRED');
+  if (!password) throw new AppError(400, 'AUTH_PASSWORD_REQUIRED');
+
+  const settings = await getSettings();
+  const candidates = await findLoginCandidates(identifier, settings.loginMethod);
+
+  if (candidates.length === 0) {
+    await bcrypt.compare(password, DUMMY_HASH);
+    await audit(req, { actor: null, action: 'LOGIN_FAILED', entityType: 'AUTH', entityRef: identifier, reason: 'UNKNOWN_IDENTIFIER' });
+    // Tell the user which identifier type is expected when a method restriction applies.
+    const looksLikePhone = isValidPhone(normalizePhone(identifier));
+    if (settings.loginMethod === 'MOBILE' && !looksLikePhone && !(await Admin.exists({ username: normalizeUsername(identifier) }))) {
+      throw new AppError(401, 'AUTH_MOBILE_ONLY');
     }
-
-    // 1. Check Farmer collection
-    let farmer = await Farmer.findOne({
-      $or: [
-        { phoneNumber: identifier },
-        { owner_id: identifier },
-        { username: String(identifier).trim().toLowerCase() },
-      ],
-    });
-
-    if (farmer) {
-      if (password && farmer.password) {
-        const isMatch = await farmer.matchPassword(password);
-        if (!isMatch && password !== farmer.password) {
-          return res.status(401).json({ success: false, message: 'Invalid password' });
-        }
-      }
-      const token = generateToken(farmer._id, 'farmer', 'FARMER');
-      return res.status(200).json({
-        success: true,
-        token,
-        data: farmer,
-        userType: 'farmer',
-      });
-    }
-
-    // 2. Check Admin collection
-    let admin = await Admin.findOne({
-      $or: [
-        { username: identifier },
-        { owner_id: identifier },
-      ],
-    });
-
-    if (admin) {
-      if (password && admin.password) {
-        const isMatch = await admin.matchPassword(password);
-        if (!isMatch && password !== admin.password) {
-          return res.status(401).json({ success: false, message: 'Invalid password' });
-        }
-      }
-      const token = generateToken(admin._id, 'admin', admin.role);
-      return res.status(200).json({
-        success: true,
-        token,
-        data: admin,
-        userType: 'admin',
-      });
-    }
-
-    // 3. Check Partner collection
-    let partner = await Partner.findOne({
-      $or: [
-        { phoneNumber: identifier },
-        { owner_id: identifier },
-      ],
-    });
-
-    if (partner) {
-      if (password && partner.password) {
-        const isMatch = await partner.matchPassword(password);
-        if (!isMatch && password !== partner.password) {
-          return res.status(401).json({ success: false, message: 'Invalid password' });
-        }
-      }
-      const token = generateToken(partner._id, 'partner', 'PARTNER');
-      return res.status(200).json({
-        success: true,
-        token,
-        data: partner,
-        userType: 'partner',
-      });
-    }
-
-    // 4. User not found in database
-    return res.status(401).json({ success: false, message: 'Invalid credentials: User not found in database' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    if (settings.loginMethod === 'USERNAME' && looksLikePhone) throw new AppError(401, 'AUTH_USERNAME_ONLY');
+    throw new AppError(401, 'AUTH_INVALID_CREDENTIALS');
   }
+
+  const locked = candidates.find((c) => c.user.isLocked());
+  if (locked && candidates.length === 1) {
+    await audit(req, { actor: locked.user, actorRole: locked.userType.toUpperCase(), action: 'LOGIN_BLOCKED', entityType: 'AUTH', entityId: locked.user._id, entityRef: identifier, reason: 'LOCKED' });
+    throw new AppError(429, 'AUTH_ACCOUNT_LOCKED', { minutes: locked.user.lockMinutesRemaining() });
+  }
+
+  let matched = null;
+  for (const candidate of candidates) {
+    if (candidate.user.isLocked()) continue;
+    // eslint-disable-next-line no-await-in-loop
+    if (await candidate.user.matchPassword(password)) {
+      matched = candidate;
+      break;
+    }
+  }
+
+  if (!matched) {
+    for (const candidate of candidates) {
+      if (!candidate.user.isLocked()) {
+        // eslint-disable-next-line no-await-in-loop
+        await candidate.user.registerFailedLogin();
+      }
+    }
+    await audit(req, {
+      actor: candidates[0].user,
+      actorRole: candidates[0].userType === 'admin' ? candidates[0].user.role : candidates[0].userType.toUpperCase(),
+      action: 'LOGIN_FAILED',
+      entityType: 'AUTH',
+      entityId: candidates[0].user._id,
+      entityRef: identifier,
+      reason: 'WRONG_PASSWORD',
+    });
+    throw new AppError(401, 'AUTH_INVALID_CREDENTIALS');
+  }
+
+  const { user, userType } = matched;
+  const actorRole = userType === 'admin' ? user.role : userType.toUpperCase();
+
+  if (user.status !== 'Active') {
+    await audit(req, { actor: user, actorRole, action: 'LOGIN_BLOCKED', entityType: 'AUTH', entityId: user._id, entityRef: identifier, reason: `STATUS_${String(user.status).toUpperCase()}` });
+    throw new AppError(403, 'AUTH_ACCOUNT_INACTIVE');
+  }
+
+  if (user.$locals.needsRehash) user.password = password; // re-hashed by the pre-save hook
+  await user.registerSuccessfulLogin();
+
+  await audit(req, { actor: user, actorRole, action: 'LOGIN_SUCCESS', entityType: 'AUTH', entityId: user._id, entityRef: identifier });
+
+  user.userType = userType;
+  res.status(200).json(sessionPayload(user, userType, signToken(user, userType)));
 };
 
-// @desc    Admin Login
-// @route   POST /api/auth/admin/login
-exports.loginAdmin = async (req, res) => {
-  try {
-    const { username, password, owner_id, userId } = req.body;
-    const identifier = username || owner_id || userId;
+// @route   POST /api/auth/register  (Farmer self-registration)
+exports.registerFarmer = async (req, res) => {
+  const body = req.body || {};
+  const phoneNumber = await assertPhone(body.phoneNumber, { exclude: {} });
+  const username = await assertUsername(body.username);
+  const password = assertPassword(body.password, body.confirmPassword);
+  const name = cleanText(body.name, 100);
+  if (!name) throw new AppError(400, 'NAME_REQUIRED');
 
-    if (!identifier || !password) {
-      return res.status(400).json({ success: false, message: 'Username/Owner ID and password are required' });
-    }
+  const farmer = await Farmer.create({
+    owner_id: `farmer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    phoneNumber,
+    username,
+    name,
+    password,
+    language: cleanText(body.language, 40) || 'English',
+    cropType: cleanText(body.cropType, 100),
+    landSizeAcres: Math.max(0, Number(body.landSizeAcres) || 0),
+    addressLine: cleanText(body.addressLine, 300),
+    village: cleanText(body.village, 100),
+    district: cleanText(body.district, 100),
+    state: cleanText(body.state, 100),
+    pincode: cleanText(body.pincode, 10),
+    appLanguage: body.appLanguage === 'hi' ? 'hi' : 'en',
+  });
 
-    let admin = await Admin.findOne({
-      $or: [
-        { username: identifier },
-        { owner_id: identifier },
-      ],
-    });
+  await audit(req, { actor: farmer, actorRole: 'FARMER', action: 'ACCOUNT_REGISTERED', entityType: 'FARMER', entityId: farmer._id, entityRef: username });
 
-    if (!admin) {
-      return res.status(401).json({ success: false, message: 'Admin user not found in database' });
-    }
-
-    const isMatch = await admin.matchPassword(password);
-    if (!isMatch && password !== admin.password) {
-      return res.status(401).json({ success: false, message: 'Invalid password' });
-    }
-
-    const token = generateToken(admin._id, 'admin', admin.role);
-
-    res.status(200).json({
-      success: true,
-      token,
-      data: admin,
-      userType: 'admin',
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+  farmer.userType = 'farmer';
+  res.status(201).json(sessionPayload(farmer, 'farmer', signToken(farmer, 'farmer')));
 };
 
-// @desc    Partner Login
-// @route   POST /api/auth/partner/login
-exports.loginPartner = async (req, res) => {
-  try {
-    const { phoneNumber, password, owner_id, userId } = req.body;
-    const identifier = phoneNumber || owner_id || userId;
-
-    if (!identifier || !password) {
-      return res.status(400).json({ success: false, message: 'Phone number/Owner ID and password are required' });
-    }
-
-    let partner = await Partner.findOne({
-      $or: [
-        { phoneNumber: identifier },
-        { owner_id: identifier },
-      ],
-    });
-
-    if (!partner) {
-      return res.status(401).json({ success: false, message: 'Partner not found in database' });
-    }
-
-    const isMatch = await partner.matchPassword(password);
-    if (!isMatch && password !== partner.password) {
-      return res.status(401).json({ success: false, message: 'Invalid password' });
-    }
-
-    const token = generateToken(partner._id, 'partner', 'PARTNER');
-
-    res.status(200).json({
-      success: true,
-      token,
-      data: partner,
-      userType: 'partner',
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-
-
-
-// @desc    Get Current Logged in User Profile
 // @route   GET /api/auth/me
 exports.getMe = async (req, res) => {
-  try {
-    res.status(200).json({
-      success: true,
-      data: req.user,
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+  res.status(200).json({
+    success: true,
+    userType: req.userType,
+    data: req.user.toJSON(),
+    permissions: req.userType === 'admin' ? effectivePermissions(req.user) : [],
+  });
 };
 
-// @desc    Update Current Logged in User Profile
-// @route   PUT /api/auth/me
+// @route   PUT /api/auth/me — users may only edit their own descriptive profile fields.
 exports.updateMe = async (req, res) => {
-  try {
-    let updatedUser = null;
-    const userId = req.user._id;
+  const body = req.body || {};
+  const user = req.user;
+  const set = (field, value) => { if (value !== undefined) user[field] = value; };
 
-    const {
-      name,
-      phoneNumber,
-      language,
-      cropType,
-      landSizeAcres,
-      addressLine,
-      village,
-      district,
-      state,
-      pincode,
-      profileUrl,
-      coverImageUrl,
-      businessName,
-      gstNumber,
-      serviceArea,
-      online,
-      vehicleName,
-      vehicleNumber,
-    } = req.body;
-
-    const updateFields = {};
-    if (name !== undefined) updateFields.name = name;
-    if (phoneNumber !== undefined) updateFields.phoneNumber = phoneNumber;
-    if (profileUrl !== undefined) updateFields.profileUrl = profileUrl;
-    if (coverImageUrl !== undefined) updateFields.coverImageUrl = coverImageUrl;
-
-    if (req.user.userType === 'farmer' || req.user.role === 'FARMER') {
-      if (language !== undefined) updateFields.language = language;
-      if (cropType !== undefined) updateFields.cropType = cropType;
-      if (landSizeAcres !== undefined) updateFields.landSizeAcres = Number(landSizeAcres);
-      if (addressLine !== undefined) updateFields.addressLine = addressLine;
-      if (village !== undefined) updateFields.village = village;
-      if (district !== undefined) updateFields.district = district;
-      if (state !== undefined) updateFields.state = state;
-      if (pincode !== undefined) updateFields.pincode = pincode;
-
-      updatedUser = await Farmer.findByIdAndUpdate(userId, updateFields, {
-        new: true,
-        runValidators: true,
-      }).select('-password');
-    } else if (req.user.userType === 'admin' || ['SUPER_ADMIN', 'ADMIN', 'MODERATOR'].includes(req.user.role)) {
-      updatedUser = await Admin.findByIdAndUpdate(userId, updateFields, {
-        new: true,
-        runValidators: true,
-      }).select('-password');
-    } else if (req.user.userType === 'partner' || req.user.role === 'PARTNER') {
-      if (businessName !== undefined) updateFields.businessName = businessName;
-      if (gstNumber !== undefined) updateFields.gstNumber = gstNumber;
-      if (serviceArea !== undefined) updateFields.serviceArea = serviceArea;
-      if (addressLine !== undefined) updateFields.addressLine = addressLine;
-      if (online !== undefined) updateFields.online = Boolean(online);
-      if (vehicleName !== undefined) updateFields.vehicleName = vehicleName;
-      if (vehicleNumber !== undefined) updateFields.vehicleNumber = vehicleNumber;
-
-      updatedUser = await Partner.findByIdAndUpdate(userId, updateFields, {
-        new: true,
-        runValidators: true,
-      }).select('-password');
-
-      // If partner goes offline, cancel and unassign all active orders assigned to them
-      if (online === false || online === 'false') {
-        const Order = require('../models/Order');
-        await Order.updateMany(
-          {
-            $or: [
-              { assignedPartnerId: userId },
-              { assignedPartnerName: req.user.name || req.user.businessName || '' }
-            ],
-            status: { $in: ['SHIPPED', 'PLACED'] }
-          },
-          {
-            $set: {
-              status: 'CANCELLED',
-              assignedPartnerId: null,
-              assignedPartnerName: '',
-              assignedPartnerPhone: '',
-              trackingNote: 'Order delivery cancelled as partner went offline. Re-opened for delivery assignment.'
-            }
-          }
-        );
-      }
-    }
-
-
-    if (!updatedUser) {
-      return res.status(444 || 404).json({ success: false, message: 'User not found' });
-    }
-
-    res.status(200).json({
-      success: true,
-      data: updatedUser,
-    });
-  } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+  if (body.name !== undefined) {
+    const name = cleanText(body.name, 100);
+    if (!name) throw new AppError(400, 'NAME_REQUIRED');
+    user.name = name;
   }
+  if (body.profileUrl !== undefined) set('profileUrl', cleanText(body.profileUrl, 1000));
+  if (body.coverImageUrl !== undefined) set('coverImageUrl', cleanText(body.coverImageUrl, 1000));
+  if (body.appLanguage !== undefined) set('appLanguage', body.appLanguage === 'hi' ? 'hi' : 'en');
+
+  if (req.userType === 'farmer') {
+    if (body.phoneNumber !== undefined && normalizePhone(body.phoneNumber) !== user.phoneNumber) {
+      user.phoneNumber = await assertPhone(body.phoneNumber, { exclude: { type: 'farmer', id: user._id } });
+    }
+    ['language', 'cropType', 'addressLine', 'village', 'district', 'state', 'pincode'].forEach((f) => {
+      if (body[f] !== undefined) set(f, cleanText(body[f], f === 'addressLine' ? 300 : 100));
+    });
+    if (body.landSizeAcres !== undefined) set('landSizeAcres', Math.max(0, Number(body.landSizeAcres) || 0));
+  } else if (req.userType === 'partner') {
+    ['businessName', 'gstNumber', 'serviceArea', 'addressLine', 'vehicleName', 'vehicleNumber'].forEach((f) => {
+      if (body[f] !== undefined) set(f, cleanText(body[f], 200));
+    });
+    if (body.online !== undefined) {
+      const goingOnline = body.online === true || body.online === 'true';
+      if (!goingOnline && user.online !== false) {
+        // Cannot vanish with goods in hand; assigned-but-not-picked-up orders return to the pool.
+        const outForDelivery = await Order.countDocuments({ assignedPartnerId: user._id, status: 'OUT_FOR_DELIVERY' });
+        if (outForDelivery > 0) throw new AppError(400, 'PARTNER_OFFLINE_ACTIVE_DELIVERY');
+        await releaseOrdersOfPartner(req, user, 'Delivery partner went offline');
+      }
+      user.online = goingOnline;
+    }
+  } else if (req.userType === 'admin') {
+    if (body.phoneNumber !== undefined) {
+      const phone = normalizePhone(body.phoneNumber);
+      if (phone && !isValidPhone(phone)) throw new AppError(400, 'PHONE_INVALID');
+      user.phoneNumber = phone;
+    }
+    if (body.email !== undefined) set('email', cleanText(body.email, 200));
+  }
+
+  await user.save();
+  res.status(200).json({ success: true, data: user.toJSON() });
 };
 
-// @desc    Update Password (for Farmer, Partner, Admin)
 // @route   PUT /api/auth/update-password
 exports.updatePassword = async (req, res) => {
-  try {
-    const { oldPassword, newPassword, confirmPassword, adminPin } = req.body;
+  const { oldPassword, newPassword, confirmPassword } = req.body || {};
+  assertPassword(newPassword, confirmPassword);
+  if (!oldPassword) throw new AppError(400, 'PASSWORD_OLD_REQUIRED');
+  if (!(await req.user.matchPassword(oldPassword))) throw new AppError(401, 'PASSWORD_OLD_INCORRECT');
 
-    if (!newPassword || !confirmPassword) {
-      return res.status(400).json({
-        success: false,
-        message: 'New password and confirm password are required',
-      });
-    }
+  req.user.password = newPassword;
+  req.user.tokenVersion = (req.user.tokenVersion || 0) + 1; // sign out every other session
+  await req.user.save();
 
-    if (newPassword !== confirmPassword) {
-      return res.status(400).json({
-        success: false,
-        message: 'New password and confirm password do not match',
-      });
-    }
-
-    if (newPassword.length < 6) {
-      return res.status(400).json({
-        success: false,
-        message: 'Password must be at least 6 characters long',
-      });
-    }
-
-    const userId = req.user._id;
-    const userType = req.user.userType;
-    const role = req.user.role;
-
-    let user = null;
-    const isAdmin = userType === 'admin' || ['SUPER_ADMIN', 'ADMIN', 'MODERATOR'].includes(role);
-
-    if (isAdmin) {
-      user = await Admin.findById(userId);
-    } else if (userType === 'partner' || role === 'PARTNER') {
-      user = await Partner.findById(userId);
-    } else {
-      user = await Farmer.findById(userId);
-    }
-
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
-
-    // Role specific security validation
-    if (isAdmin) {
-      // Admin requires security PIN managed via ENV
-      const envAdminPin = process.env.ADMIN_SECURITY_PIN || '8888';
-      if (!adminPin || String(adminPin).trim() !== String(envAdminPin).trim()) {
-        return res.status(401).json({
-          success: false,
-          message: 'Invalid Admin Security PIN. Admin password update requires valid PIN.',
-        });
-      }
-      if (oldPassword && user.matchPassword) {
-        const isMatch = await user.matchPassword(oldPassword);
-        if (!isMatch && oldPassword !== user.password) {
-          return res.status(401).json({ success: false, message: 'Old password does not match' });
-        }
-      }
-    } else {
-      // Farmer / Partner require oldPassword verification
-      if (!oldPassword) {
-        return res.status(400).json({
-          success: false,
-          message: 'Old password is required',
-        });
-      }
-
-      if (user.matchPassword) {
-        const isMatch = await user.matchPassword(oldPassword);
-        if (!isMatch && oldPassword !== user.password) {
-          return res.status(401).json({
-            success: false,
-            message: 'Old password does not match',
-          });
-        }
-      } else if (oldPassword !== user.password) {
-        return res.status(401).json({
-          success: false,
-          message: 'Old password does not match',
-        });
-      }
-    }
-
-    // Set new password (pre save hook will hash it)
-    user.password = newPassword;
-    await user.save();
-
-    return res.status(200).json({
-      success: true,
-      message: 'Password updated successfully',
-    });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
+  await audit(req, { action: 'PASSWORD_CHANGED', entityType: req.userType.toUpperCase(), entityId: req.user._id });
+  res.status(200).json({
+    success: true,
+    message: t(req, 'PASSWORD_UPDATED'),
+    token: signToken(req.user, req.userType),
+  });
 };
 
-// @desc    Get all Farmers, Partners, and Admins for Admin User Management Hub
-// @route   GET /api/auth/all-users
-exports.getAllUsers = async (req, res) => {
-  try {
-    const farmers = await Farmer.find().select('-password');
-    const partners = await Partner.find().select('-password');
-    const admins = await Admin.find().select('-password');
-
-    res.status(200).json({
-      success: true,
-      data: {
-        farmers,
-        partners,
-        admins,
-      },
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// @desc    Check whether a username is available
 // @route   GET /api/auth/check-username?username=xyz
 exports.checkUsernameAvailability = async (req, res) => {
-  try {
-    const { username } = req.query;
-
-    if (!username) {
-      return res.status(400).json({ success: false, message: 'Username is required' });
-    }
-
-    const normalizedUsername = String(username).trim().toLowerCase();
-    if (!/^[a-z0-9_]{3,20}$/.test(normalizedUsername)) {
-      return res.status(400).json({ success: false, message: 'Username must be 3-20 characters and contain only lowercase letters, numbers, and underscores' });
-    }
-
-    const [existingFarmer, existingAdmin] = await Promise.all([
-      Farmer.findOne({ username: normalizedUsername }),
-      Admin.findOne({ username: normalizedUsername }),
-    ]);
-
-    const available = !existingFarmer && !existingAdmin;
-
-    res.status(200).json({
-      success: true,
-      available,
-      message: available ? 'Username is available' : 'Username already exists',
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+  const username = normalizeUsername(req.query.username);
+  if (!username) throw new AppError(400, 'USERNAME_REQUIRED');
+  if (!isValidUsername(username)) throw new AppError(400, 'USERNAME_INVALID');
+  const available = !(await isUsernameTaken(username));
+  res.status(200).json({ success: true, available, message: t(req, available ? 'USERNAME_AVAILABLE' : 'USERNAME_TAKEN') });
 };
 
-// @desc    Check whether a username/phone number belongs to an existing account (forgot password step 1)
-// @route   POST /api/auth/forgot-password/check
-exports.forgotPasswordCheck = async (req, res) => {
-  try {
-    const { identifier } = req.body;
+// @route   POST /api/auth/forgot-password
+// Always returns the same response so the endpoint cannot be used to discover accounts.
+exports.requestPasswordReset = async (req, res) => {
+  const identifier = cleanText((req.body || {}).identifier, 100);
+  if (!identifier) throw new AppError(400, 'AUTH_IDENTIFIER_REQUIRED');
 
-    if (!identifier) {
-      return res.status(400).json({ success: false, message: 'Username or phone number is required' });
-    }
+  const candidates = await findLoginCandidates(identifier, 'USERNAME_OR_MOBILE');
+  const match = candidates[0];
 
-    const found = await findUnifiedUser(identifier);
-
-    res.status(200).json({
-      success: true,
-      exists: !!found,
+  const recentOpen = match && await PasswordResetRequest.findOne({ userId: String(match.user._id), status: 'OPEN' });
+  if (!recentOpen) {
+    const request = await PasswordResetRequest.create({
+      identifier,
+      userType: match ? match.userType : 'unknown',
+      userId: match ? String(match.user._id) : null,
+      userName: match ? (match.user.name || match.user.username || '') : '',
+      phoneNumber: match ? (match.user.phoneNumber || '') : '',
     });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    await audit(req, { actor: null, action: 'PASSWORD_RESET_REQUESTED', entityType: 'AUTH', entityId: request._id, entityRef: identifier });
   }
+
+  res.status(200).json({ success: true, message: t(req, 'PASSWORD_RESET_REQUESTED') });
 };
-
-// @desc    Reset a forgotten password given a verified username/phone number (forgot password step 2)
-// @route   POST /api/auth/forgot-password/reset
-exports.forgotPasswordReset = async (req, res) => {
-  try {
-    const { identifier, newPassword, confirmPassword } = req.body;
-
-    if (!identifier) {
-      return res.status(400).json({ success: false, message: 'Username or phone number is required' });
-    }
-
-    if (!newPassword || !confirmPassword) {
-      return res.status(400).json({ success: false, message: 'New password and confirm password are required' });
-    }
-
-    if (newPassword !== confirmPassword) {
-      return res.status(400).json({ success: false, message: 'New password and confirm password do not match' });
-    }
-
-    if (newPassword.length < 6) {
-      return res.status(400).json({ success: false, message: 'Password must be at least 6 characters long' });
-    }
-
-    const found = await findUnifiedUser(identifier);
-    if (!found) {
-      return res.status(404).json({ success: false, message: 'No account found with this username or phone number' });
-    }
-
-    found.user.password = newPassword;
-    await found.user.save();
-
-    res.status(200).json({
-      success: true,
-      message: 'Password reset successful',
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-

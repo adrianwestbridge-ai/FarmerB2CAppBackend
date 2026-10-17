@@ -8,7 +8,9 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "seed": "node seedData.js"
+    "seed": "node seedData.js",
+    "migrate:v2": "node scripts/migrate-v2.js",
+    "test:e2e": "node tests/api.e2e.js"
   },
   "author": "",
   "license": "ISC",

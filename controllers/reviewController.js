@@ -22,19 +22,19 @@ exports.getProductReviews = async (req, res) => {
 // @route   POST /api/reviews
 exports.createReview = async (req, res) => {
   try {
-    const { productId, farmerName, rating, comment } = req.body;
-    const owner_id = req.user ? (req.user.owner_id || req.user._id.toString()) : (req.body.owner_id || 'anonymous');
+    const { productId, rating, comment } = req.body || {};
+    const owner_id = req.user.owner_id;
 
-    if (!productId || !rating) {
+    if (!productId || !(Number(rating) >= 1 && Number(rating) <= 5)) {
       return res.status(400).json({ success: false, message: 'productId and rating (1-5) are required' });
     }
 
     const review = await Review.create({
       owner_id,
       productId,
-      farmerName: farmerName || (req.user ? req.user.name : 'Farmer'),
+      farmerName: req.user.name || req.user.username || 'Farmer',
       rating: Number(rating),
-      comment: comment || '',
+      comment: String(comment || '').slice(0, 1000),
     });
 
     // Recalculate average rating for Product if product exists in DB
@@ -60,10 +60,12 @@ exports.createReview = async (req, res) => {
 // @route   DELETE /api/reviews/:id
 exports.deleteReview = async (req, res) => {
   try {
-    const review = await Review.findByIdAndDelete(req.params.id);
-    if (!review) {
+    const review = await Review.findById(req.params.id);
+    // Farmers may delete only their own reviews; admins may moderate any review.
+    if (!review || (req.userType === 'farmer' && review.owner_id !== req.user.owner_id)) {
       return res.status(404).json({ success: false, message: 'Review not found' });
     }
+    await review.deleteOne();
     res.status(200).json({ success: true, message: 'Review deleted successfully' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

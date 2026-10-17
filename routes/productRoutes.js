@@ -7,18 +7,19 @@ const {
   updateStock,
   deleteProduct,
 } = require('../controllers/productController');
-const { protect, adminOnly } = require('../middleware/authMiddleware');
+const { protect, optionalAuth, requirePermission } = require('../middleware/authMiddleware');
+const { PERMISSIONS: P } = require('../utils/permissions');
 
 const router = express.Router();
 
-// Public / Farmer Routes
-router.get('/', getProducts);
-router.get('/:id', getProductById);
+// Public catalogue (admins with PRODUCTS_MANAGE additionally see inactive products)
+router.get('/', optionalAuth, getProducts);
+router.get('/:id', optionalAuth, getProductById);
 
-// Admin / Management Routes
-router.post('/', protect, adminOnly, createProduct);
-router.put('/:id', protect, adminOnly, updateProduct);
-router.patch('/:id/stock', protect, adminOnly, updateStock);
-router.delete('/:id', protect, adminOnly, deleteProduct);
+// Product management
+router.post('/', protect, requirePermission(P.PRODUCTS_MANAGE), createProduct);
+router.put('/:id', protect, requirePermission(P.PRODUCTS_MANAGE), updateProduct);
+router.patch('/:id/stock', protect, requirePermission(P.PRODUCTS_MANAGE), updateStock);
+router.delete('/:id', protect, requirePermission(P.PRODUCTS_MANAGE), deleteProduct);
 
 module.exports = router;

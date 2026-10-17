@@ -1,334 +1,232 @@
-const mongoose = require('mongoose');
 const Order = require('../models/Order');
-const Product = require('../models/Product');
-const Farmer = require('../models/Farmer');
-const CartItem = require('../models/CartItem');
+const { AppError, t } = require('../utils/i18n');
+const { hasPermission, PERMISSIONS } = require('../utils/permissions');
+const { requireValidId, escapeRegex, parseDate, cleanText } = require('../utils/validators');
+const { priceCart } = require('../services/pricingService');
+const svc = require('../services/orderService');
 
-// @desc    Create a new Order with Farmer & Product Verification
-// @route   POST /api/orders
+// ─── Role-aware serialization ────────────────────────────────────────────────
+
+const stripActor = (entry) => {
+  const { byId, byName, ...rest } = entry;
+  return rest;
+};
+
+const serializeOrder = (order, userType) => {
+  const o = typeof order.toObject === 'function' ? order.toObject() : { ...order };
+  delete o.idempotencyKey;
+  delete o.__v;
+  if (userType === 'farmer') {
+    delete o.verificationCalls;
+    delete o.assignmentHistory;
+    delete o.decisionBy;
+    delete o.paymentVerifiedBy;
+    delete o.refundedBy;
+    delete o.cancelledBy;
+    delete o.settlementId;
+    o.statusHistory = (o.statusHistory || []).map(stripActor);
+    o.paymentHistory = (o.paymentHistory || []).map(stripActor);
+  } else if (userType === 'partner') {
+    delete o.verificationCalls;
+    delete o.decisionBy;
+    delete o.paymentVerifiedBy;
+    delete o.refundedBy;
+    delete o.cancelledBy;
+    o.paymentHistory = (o.paymentHistory || []).map(stripActor);
+  }
+  return o;
+};
+
+// ─── Access control for a single order ───────────────────────────────────────
+
+const canView = (req, order) => {
+  if (req.userType === 'admin') return true;
+  if (req.userType === 'farmer') return String(order.farmerId) === String(req.user._id);
+  if (req.userType === 'partner') {
+    const me = String(req.user._id);
+    return order.status === 'APPROVED'
+      || String(order.assignedPartnerId || '') === me
+      || String(order.deliveredBy || '') === me;
+  }
+  return false;
+};
+
+// ─── Queries ─────────────────────────────────────────────────────────────────
+
+const STATUS_GROUPS = {
+  ACTIVE: ['PENDING_APPROVAL', 'APPROVED', 'ASSIGNED', 'OUT_FOR_DELIVERY', 'DELIVERY_FAILED'],
+  CLOSED: ['DELIVERED', 'REJECTED', 'CANCELLED'],
+};
+
+const statusFilter = (raw) => {
+  if (!raw) return null;
+  const parts = String(raw).split(',').map((s) => s.trim().toUpperCase()).filter(Boolean)
+    .flatMap((s) => STATUS_GROUPS[s] || [s]);
+  const valid = parts.filter((s) => Order.ORDER_STATUSES.includes(s));
+  return valid.length ? { $in: valid } : null;
+};
+
+const listFilter = (req) => {
+  const q = req.query || {};
+  const filter = {};
+  const status = statusFilter(q.status);
+  if (status) filter.status = status;
+
+  if (q.paymentStatus && Order.PAYMENT_STATUSES.includes(String(q.paymentStatus).toUpperCase())) {
+    filter.paymentStatus = String(q.paymentStatus).toUpperCase();
+  }
+  if (q.paymentMethod && ['COD', 'ONLINE'].includes(String(q.paymentMethod).toUpperCase())) {
+    filter.paymentMethod = String(q.paymentMethod).toUpperCase();
+  }
+  if (q.collectionStatus && Order.COLLECTION_STATUSES.includes(String(q.collectionStatus).toUpperCase())) {
+    filter.collectionStatus = String(q.collectionStatus).toUpperCase();
+  }
+  if (q.settlementStatus && Order.SETTLEMENT_STATUSES.includes(String(q.settlementStatus).toUpperCase())) {
+    filter.settlementStatus = String(q.settlementStatus).toUpperCase();
+  }
+  const from = parseDate(q.from);
+  const to = parseDate(q.to, true);
+  if (from || to) {
+    filter.createdAt = {};
+    if (from) filter.createdAt.$gte = from;
+    if (to) filter.createdAt.$lte = to;
+  }
+  return filter;
+};
+
+// @route GET /api/orders
+exports.getOrders = async (req, res) => {
+  const q = req.query || {};
+  const limit = Math.min(200, Math.max(1, Number(q.limit) || 50));
+  const page = Math.max(1, Number(q.page) || 1);
+  const filter = listFilter(req);
+
+  if (req.userType === 'farmer') {
+    filter.farmerId = req.user._id;
+  } else if (req.userType === 'partner') {
+    const me = req.user._id;
+    const scope = String(q.scope || 'all').toLowerCase();
+    if (scope === 'pool') {
+      filter.status = 'APPROVED';
+    } else if (scope === 'mine') {
+      filter.$or = [{ assignedPartnerId: me }, { deliveredBy: me }];
+    } else {
+      filter.$or = [{ status: 'APPROVED' }, { assignedPartnerId: me }, { deliveredBy: me }];
+    }
+  } else {
+    if (q.partnerId) filter.$or = [{ assignedPartnerId: requireValidId(q.partnerId) }, { deliveredBy: q.partnerId }];
+    if (q.farmerId) filter.farmerId = requireValidId(q.farmerId);
+    if (q.search) {
+      const rx = new RegExp(escapeRegex(cleanText(q.search, 60)), 'i');
+      const searchOr = [{ orderNumber: rx }, { farmerName: rx }, { farmerPhone: rx }, { paymentReference: rx }];
+      if (filter.$or) {
+        filter.$and = [{ $or: filter.$or }, { $or: searchOr }];
+        delete filter.$or;
+      } else {
+        filter.$or = searchOr;
+      }
+    }
+  }
+
+  // Oldest first for the approval queue, newest first otherwise.
+  const sort = String(q.sort || '') === 'oldest' ? { createdAt: 1 } : { createdAt: -1 };
+  const [orders, total] = await Promise.all([
+    Order.find(filter).sort(sort).skip((page - 1) * limit).limit(limit),
+    Order.countDocuments(filter),
+  ]);
+
+  res.status(200).json({
+    success: true,
+    count: orders.length,
+    total,
+    page,
+    pages: Math.ceil(total / limit),
+    data: orders.map((o) => serializeOrder(o, req.userType)),
+  });
+};
+
+// @route GET /api/orders/counts  (admin) — badge counts for the dashboard
+exports.getOrderCounts = async (req, res) => {
+  const rows = await Order.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]);
+  const byStatus = Object.fromEntries(Order.ORDER_STATUSES.map((s) => [s, 0]));
+  rows.forEach((r) => { byStatus[r._id] = r.count; });
+  const [awaitingPayment, refundsPending] = await Promise.all([
+    Order.countDocuments({ paymentStatus: 'AWAITING_VERIFICATION' }),
+    Order.countDocuments({ paymentStatus: 'REFUND_PENDING' }),
+  ]);
+  res.status(200).json({ success: true, data: { byStatus, awaitingPayment, refundsPending } });
+};
+
+// @route GET /api/orders/:id
+exports.getOrderById = async (req, res) => {
+  const order = await svc.loadOrder(req.params.id);
+  if (!canView(req, order)) throw new AppError(404, 'ORDER_NOT_FOUND');
+  res.status(200).json({ success: true, data: serializeOrder(order, req.userType) });
+};
+
+// ─── Farmer ──────────────────────────────────────────────────────────────────
+
+// @route POST /api/orders/quote — price breakdown for the cart / checkout screen
+exports.quote = async (req, res) => {
+  const quote = await priceCart((req.body || {}).items, { strict: false });
+  res.status(200).json({ success: true, data: quote });
+};
+
+// @route POST /api/orders
 exports.createOrder = async (req, res) => {
   try {
-    const body = req.body || {};
-    const {
-      farmerId: reqFarmerId,
-      owner_id: reqOwnerId,
-      items = [],
-      totalAmount,
-      taxRate = 0,
-      deliveryAddress,
-      paymentMethod = 'COD',
-      paymentStatus = 'PENDING',
-      paymentReference = '',
-      trackingNote = '',
-    } = body;
-
-    const safeTaxRate = Math.max(0, Number(taxRate) || 0);
-
-    const inputFarmerId = reqFarmerId || (req.user ? req.user._id.toString() : null);
-    const inputOwnerId = reqOwnerId || (req.user ? req.user.owner_id : null) || inputFarmerId;
-
-    if (!inputFarmerId && !inputOwnerId) {
-      return res.status(400).json({
-        success: false,
-        message: 'farmerId or owner_id is required',
-      });
-    }
-
-    if (!deliveryAddress || !items || !items.length) {
-      return res.status(400).json({
-        success: false,
-        message: 'deliveryAddress and at least one item are required',
-      });
-    }
-
-    // 1. Verify and Match Farmer from Database
-    let farmer = null;
-
-    if (inputFarmerId && mongoose.Types.ObjectId.isValid(inputFarmerId)) {
-      farmer = await Farmer.findById(inputFarmerId);
-    }
-    if (!farmer && inputOwnerId) {
-      farmer = await Farmer.findOne({ owner_id: inputOwnerId });
-    }
-    if (!farmer && inputFarmerId) {
-      farmer = await Farmer.findOne({ owner_id: inputFarmerId });
-    }
-    if (!farmer && (inputFarmerId || inputOwnerId)) {
-      const searchKey = inputFarmerId || inputOwnerId;
-      farmer = await Farmer.findOne({ phoneNumber: searchKey });
-    }
-    if (!farmer) {
-      // Fallback: Get first active farmer or use provided owner_id
-      farmer = await Farmer.findOne() || { _id: new mongoose.Types.ObjectId(), owner_id: inputOwnerId || 'farmer_001' };
-    }
-
-    const matchedFarmerId = farmer._id ? farmer._id.toString() : (inputFarmerId || 'farmer_001');
-    const matchedOwnerId = farmer.owner_id || inputOwnerId || 'farmer_001';
-
-    // 2. Process & Create Single Product Orders
-    const createdOrders = [];
-
-    for (const item of items) {
-      const { productId, productName, quantity = 1, price = 0, image, productImage } = item;
-      let prod = null;
-
-      if (productId && mongoose.Types.ObjectId.isValid(productId)) {
-        prod = await Product.findById(productId);
-      }
-
-      const qty = Math.max(1, Number(quantity));
-      const itemPrice = prod ? Number(prod.price || price || 0) : Number(price || 0);
-
-      if (prod) {
-        const availableStock = prod.quantityAvailable !== undefined ? prod.quantityAvailable : (prod.stockQuantity !== undefined ? prod.stockQuantity : 0);
-        if (availableStock <= 0 || availableStock < qty) {
-          return res.status(400).json({
-            success: false,
-            message: `Sorry, "${prod.name}" is OUT OF STOCK! Available quantity is ${availableStock}.`
-          });
-        }
-
-        // Deduct remaining quantityAvailable upon successful order
-        const newAvailable = Math.max(0, availableStock - qty);
-        prod.quantityAvailable = newAvailable;
-        await prod.save();
-      }
-
-      const prodImg = prod ? (prod.imageUrls?.[0] || prod.images?.[0] || image || productImage || '') : (image || productImage || '');
-      const finalProductName = prod ? prod.name : (productName || item.name || 'Agri Product');
-      const itemTotal = Number((itemPrice * qty * (1 + safeTaxRate)).toFixed(2));
-
-      const newOrder = await Order.create({
-        owner_id: matchedOwnerId,
-        farmerId: matchedFarmerId,
-        farmerName: farmer.name || '',
-        farmerPhone: farmer.phoneNumber || '',
-        status: 'PLACED',
-        paymentMethod: paymentMethod || 'COD',
-        paymentStatus: paymentStatus || (paymentMethod === 'ONLINE' ? 'PAID' : 'PENDING'),
-        paymentReference,
-        totalAmount: itemTotal,
-        deliveryAddress,
-        trackingNote: trackingNote || 'Order placed successfully',
-        productId: prod ? prod._id : (productId && mongoose.Types.ObjectId.isValid(productId) ? productId : null),
-        productName: finalProductName,
-        productImage: prodImg,
-        quantity: qty,
-        price: itemPrice,
-      });
-
-      createdOrders.push(newOrder);
-    }
-
-    // 3. Automatically Clear Purchased Items from User's Cart
-    try {
-      await CartItem.deleteMany({ owner_id: matchedOwnerId });
-    } catch (e) {
-      // Non-blocking cart clear
-    }
-
-    res.status(201).json({
+    const { order, duplicate } = await svc.placeOrder(req, req.body || {});
+    res.status(duplicate ? 200 : 201).json({
       success: true,
-      message: `${createdOrders.length} order(s) created successfully`,
-      data: createdOrders.length === 1 ? createdOrders[0] : createdOrders,
+      duplicate,
+      message: duplicate ? t(req, 'ORDER_DUPLICATE') : undefined,
+      data: serializeOrder(order, 'farmer'),
     });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+  } catch (err) {
+    if (err instanceof AppError && err.key === 'PRICE_CHANGED') {
+      return res.status(409).json({ success: false, code: 'PRICE_CHANGED', message: t(req, 'PRICE_CHANGED'), data: err.data });
+    }
+    throw err;
   }
 };
 
-// @desc    Get orders (Farmer's orders or all orders for Admin)
-// @route   GET /api/orders
-exports.getOrders = async (req, res) => {
-  try {
-    const query = req.query || {};
-    const { farmerId, owner_id, status, assignedPartnerId } = query;
-    let filter = {};
-
-    // Strict User Isolation for Farmers
-    const targetId = owner_id || farmerId || (req.user && req.user.userType === 'farmer' ? (req.user.owner_id || req.user._id?.toString()) : null);
-
-    if (targetId) {
-      filter.$or = [
-        { farmerId: targetId },
-        { owner_id: targetId },
-      ];
-    }
-
-    if (status) filter.status = status;
-    if (assignedPartnerId) filter.assignedPartnerId = assignedPartnerId;
-
-    const orders = await Order.find(filter)
-      .populate('productId')
-      .sort({ createdAt: -1 });
-
-    res.status(200).json({
-      success: true,
-      count: orders.length,
-      data: orders,
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+// @route PATCH /api/orders/:id/payment-reference
+exports.submitPaymentReference = async (req, res) => {
+  const order = await svc.submitPaymentReference(req, req.params.id, req.body || {});
+  res.status(200).json({ success: true, data: serializeOrder(order, req.userType) });
 };
 
-const findOrderById = async (id) => {
-  if (!id) return null;
-  if (mongoose.Types.ObjectId.isValid(id)) {
-    const order = await Order.findById(id).populate('productId');
-    if (order) return order;
+// @route PATCH /api/orders/:id/cancel  (farmer: own order; admin: ORDERS_APPROVE)
+exports.cancelOrder = async (req, res) => {
+  if (req.userType === 'admin' && !hasPermission(req.user, PERMISSIONS.ORDERS_APPROVE)) {
+    throw new AppError(403, 'AUTH_FORBIDDEN');
   }
-  return await Order.findOne({ owner_id: id }).populate('productId');
+  if (req.userType === 'partner') throw new AppError(403, 'AUTH_FORBIDDEN');
+  const order = await svc.cancelOrder(req, req.params.id, req.body || {});
+  res.status(200).json({ success: true, data: serializeOrder(order, req.userType) });
 };
 
-// @desc    Get single order details
-// @route   GET /api/orders/:id
-exports.getOrderById = async (req, res) => {
-  try {
-    const params = req.params || {};
-    const order = await findOrderById(params.id);
-    if (!order) {
-      return res.status(404).json({ success: false, message: 'Order not found' });
-    }
-    res.status(200).json({ success: true, data: order });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+// ─── Admin ───────────────────────────────────────────────────────────────────
+
+const respond = (fn) => async (req, res) => {
+  const order = await fn(req, req.params.id, req.body || {});
+  res.status(200).json({ success: true, data: serializeOrder(order, req.userType) });
 };
 
-// @desc    Update order status / tracking note (Admin / Agent)
-// @route   PATCH /api/orders/:id/status
-exports.updateOrderStatus = async (req, res) => {
-  try {
-    const params = req.params || {};
-    const body = req.body || {};
-    const { status, trackingNote } = body;
+exports.recordVerification = respond(svc.recordVerification);
+exports.approveOrder = respond(svc.approveOrder);
+exports.rejectOrder = respond(svc.rejectOrder);
+exports.assignPartner = respond(svc.adminAssign);
+exports.releaseOrder = respond(svc.adminRelease);
+exports.verifyPayment = respond(svc.verifyPayment);
+exports.recordRefund = respond(svc.recordRefund);
 
-    const order = await findOrderById(params.id);
-    if (!order) {
-      return res.status(404).json({ success: false, message: 'Order not found' });
-    }
+// ─── Delivery partner ────────────────────────────────────────────────────────
 
-    if (status) order.status = status;
-    if (trackingNote !== undefined) order.trackingNote = trackingNote;
+exports.acceptOrder = respond((req, id) => svc.acceptFromPool(req, id));
+exports.reportUnavailable = respond(svc.partnerUnavailable);
+exports.pickupOrder = respond((req, id) => svc.partnerPickup(req, id));
+exports.completeDelivery = respond(svc.partnerDeliver);
+exports.failDelivery = respond(svc.partnerFail);
 
-    await order.save();
-    res.status(200).json({ success: true, data: order });
-  } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
-  }
-};
-
-// @desc    Update payment status
-// @route   PATCH /api/orders/:id/payment
-exports.updatePaymentStatus = async (req, res) => {
-  try {
-    const params = req.params || {};
-    const body = req.body || {};
-    const { paymentStatus, paymentReference } = body;
-
-    const order = await findOrderById(params.id);
-    if (!order) {
-      return res.status(404).json({ success: false, message: 'Order not found' });
-    }
-
-    if (paymentStatus) order.paymentStatus = paymentStatus;
-    if (paymentReference !== undefined) order.paymentReference = paymentReference;
-
-    await order.save();
-    res.status(200).json({ success: true, data: order });
-  } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
-  }
-};
-
-// @desc    Accept order by partner (moves from PLACED/CANCELLED -> SHIPPED)
-// @route   PATCH /api/orders/:id/accept
-exports.acceptOrder = async (req, res) => {
-  try {
-    const { partnerId, partnerName, partnerPhone } = req.body || {};
-    const order = await findOrderById(req.params.id);
-    if (!order) {
-      return res.status(404).json({ success: false, message: 'Order not found' });
-    }
-
-    if (partnerId && mongoose.Types.ObjectId.isValid(partnerId)) {
-      const Partner = require('../models/Partner');
-      const partnerObj = await Partner.findById(partnerId);
-      if (partnerObj && partnerObj.online === false) {
-        return res.status(400).json({
-          success: false,
-          message: 'You are offline! Please go online from your dashboard to accept delivery orders.'
-        });
-      }
-    }
-
-    if (order.status !== 'PLACED' && order.status !== 'CANCELLED') {
-      return res.status(400).json({ success: false, message: `Cannot accept order with status '${order.status}'` });
-    }
-
-    order.status = 'SHIPPED';
-    if (partnerId && mongoose.Types.ObjectId.isValid(partnerId)) {
-      order.assignedPartnerId = partnerId;
-    }
-    if (partnerName) order.assignedPartnerName = partnerName;
-    if (partnerPhone) order.assignedPartnerPhone = partnerPhone;
-    order.trackingNote = `Accepted by partner ${partnerName || ''}. Order is out for delivery.`.trim();
-
-    await order.save();
-    res.status(200).json({ success: true, message: 'Order accepted successfully', data: order });
-  } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
-  }
-};
-
-// @desc    Cancel delivery by partner (moves status back to PLACED so other partners can accept)
-// @route   PATCH /api/orders/:id/cancel-delivery
-exports.cancelDelivery = async (req, res) => {
-  try {
-    const { reason } = req.body || {};
-    const order = await findOrderById(req.params.id);
-    if (!order) {
-      return res.status(404).json({ success: false, message: 'Order not found' });
-    }
-
-    order.status = 'PLACED';
-    order.assignedPartnerId = null;
-    order.assignedPartnerName = '';
-    order.assignedPartnerPhone = '';
-    order.trackingNote = reason ? `Delivery cancelled: ${reason}. Order re-opened for new partners.` : 'Delivery cancelled by partner. Order is re-opened for new partners to accept.';
-
-    await order.save();
-    res.status(200).json({ success: true, message: 'Delivery cancelled. Order is now open for other partners to accept.', data: order });
-  } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
-  }
-};
-
-// @desc    Complete delivery by partner (moves from SHIPPED -> DELIVERED)
-// @route   PATCH /api/orders/:id/deliver
-exports.completeDelivery = async (req, res) => {
-  try {
-    const { deliveryProofUrl, deliveryNote, trackingNote, markAsPaid } = req.body || {};
-    const order = await findOrderById(req.params.id);
-    if (!order) {
-      return res.status(404).json({ success: false, message: 'Order not found' });
-    }
-
-    order.status = 'DELIVERED';
-    if (deliveryProofUrl) {
-      order.deliveryProofUrl = deliveryProofUrl;
-    }
-    if (markAsPaid || order.paymentMethod === 'COD') {
-      order.paymentStatus = 'PAID';
-    }
-    order.trackingNote = deliveryNote || trackingNote || 'Order delivered successfully to farmer.';
-
-    await order.save();
-    res.status(200).json({ success: true, message: 'Order marked as DELIVERED', data: order });
-  } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
-  }
-};
-
-
+exports.serializeOrder = serializeOrder;

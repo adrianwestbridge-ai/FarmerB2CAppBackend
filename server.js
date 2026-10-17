@@ -2,6 +2,10 @@ const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
 const connectDB = require("./config/mongodb");
+const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
+const { t, AppError } = require("./utils/i18n");
+const { audit } = require("./utils/audit");
 
 // Import Route Handlers
 const authRoutes = require("./routes/authRoutes");
@@ -11,36 +15,35 @@ const productRoutes = require("./routes/productRoutes");
 const categoryRoutes = require("./routes/categoryRoutes");
 const cartRoutes = require("./routes/cartRoutes");
 const orderRoutes = require("./routes/orderRoutes");
+const offerRoutes = require("./routes/offerRoutes");
 const reviewRoutes = require("./routes/reviewRoutes");
 const farmerVisitRoutes = require("./routes/farmerVisitRoutes");
 const partnerRoutes = require("./routes/partnerRoutes");
+const settlementRoutes = require("./routes/settlementRoutes");
+const settingsRoutes = require("./routes/settingsRoutes");
+const reportRoutes = require("./routes/reportRoutes");
+const passwordResetRoutes = require("./routes/passwordResetRoutes");
 
 // App Config
 const app = express();
 const port = process.env.PORT || 4000;
 
-const helmet = require("helmet");
-const rateLimit = require("express-rate-limit");
-
 app.set("trust proxy", 1); // REQUIRED behind Caddy
 app.use(helmet());
-app.use("/api/auth", rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  message: { success: false, message: 'Too many requests. Please try again in a few minutes.' },
-}));
 app.use("/api", rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 300,
-  message: { success: false, message: 'Too many requests. Please try again in a few minutes.' },
+  max: Number(process.env.API_RATE_LIMIT || 1000),
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => res.status(429).json({ success: false, code: "TOO_MANY_REQUESTS", message: t(req, "TOO_MANY_REQUESTS") }),
 }));
 
 // Connect Database
-connectDB();
+if (require.main === module) connectDB();
 
 // Middlewares
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 
 // CORS Configuration (Native Android sends no Origin header; disable CORS to prevent arbitrary browser cross-origin access)
 app.use(cors({ origin: false, credentials: false }));
@@ -62,17 +65,40 @@ app.use("/api/products", productRoutes);
 app.use("/api/categories", categoryRoutes);
 app.use("/api/cart", cartRoutes);
 app.use("/api/orders", orderRoutes);
+app.use("/api/offers", offerRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/visits", farmerVisitRoutes);
 app.use("/api/partners", partnerRoutes);
+app.use("/api/settlements", settlementRoutes);
+app.use("/api/settings", settingsRoutes);
+app.use("/api/reports", reportRoutes);
+app.use("/api/password-resets", passwordResetRoutes);
 
-// Global Error Handler
-app.use((err, req, res, next) => {
-  console.error("❌ Unhandled Error:", err.stack);
-  res.status(err.status || 500).json({
-    success: false,
-    message: err.message || "Internal Server Error",
-  });
+app.use("/api", (req, res) => {
+  res.status(404).json({ success: false, code: "NOT_FOUND", message: t(req, "NOT_FOUND") });
+});
+
+// Global Error Handler — responses are localized and never expose internal details.
+// eslint-disable-next-line no-unused-vars
+app.use(async (err, req, res, next) => {
+  if (err instanceof AppError) {
+    if (err.status === 403) {
+      await audit(req, { action: "ACCESS_DENIED", entityType: "AUTH", reason: `${req.method} ${req.originalUrl}`, metadata: { code: err.key } });
+    }
+    return res.status(err.status).json({ success: false, code: err.key, message: t(req, err.key, err.params) });
+  }
+  if (err && err.type === "entity.parse.failed") {
+    return res.status(400).json({ success: false, code: "VALIDATION_FAILED", message: t(req, "VALIDATION_FAILED") });
+  }
+  if (err && (err.name === "ValidationError" || err.name === "CastError")) {
+    return res.status(400).json({ success: false, code: "VALIDATION_FAILED", message: t(req, "VALIDATION_FAILED") });
+  }
+  if (err && err.code === 11000) {
+    return res.status(409).json({ success: false, code: "VALIDATION_FAILED", message: t(req, "VALIDATION_FAILED") });
+  }
+  console.error("❌ Unhandled Error:", err && err.stack ? err.stack : err);
+  await audit(req, { action: "SERVER_ERROR", entityType: "SYSTEM", reason: `${req.method} ${req.originalUrl}`, metadata: { message: err && err.message } });
+  return res.status(500).json({ success: false, code: "SERVER_ERROR", message: t(req, "SERVER_ERROR") });
 });
 
 // Start Server if directly executed

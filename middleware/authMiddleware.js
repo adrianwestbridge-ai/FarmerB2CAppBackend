@@ -1,139 +1,124 @@
-const jwt = require("jsonwebtoken");
-const Farmer = require("../models/Farmer");
-const Admin = require("../models/Admin");
-const Partner = require("../models/Partner");
+const jwt = require('jsonwebtoken');
+const Farmer = require('../models/Farmer');
+const Admin = require('../models/Admin');
+const Partner = require('../models/Partner');
+const { t } = require('../utils/i18n');
+const { audit } = require('../utils/audit');
+const { hasPermission, effectivePermissions } = require('../utils/permissions');
+
+const MODELS = { farmer: Farmer, partner: Partner, admin: Admin };
+
+// Admins: Active | Deactivated | Deleted. Farmers / partners: Active | Suspended | Pending.
+const isAccountActive = (user) => user.status === 'Active';
+
+const signToken = (user, userType) => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) throw new Error('JWT_SECRET is not set');
+  return jwt.sign(
+    { id: String(user._id), userType, tv: user.tokenVersion || 0 },
+    secret,
+    { expiresIn: process.env.JWT_EXPIRES_IN || '7d' },
+  );
+};
+
+const extractToken = (req) => {
+  const header = req.headers.authorization || '';
+  return header.startsWith('Bearer ') ? header.slice(7).trim() : null;
+};
+
+// Resolves the user for a token, or null if the token/account is not valid any more.
+const resolveUser = async (token) => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) throw new Error('JWT_SECRET is not set');
+  let decoded;
+  try {
+    decoded = jwt.verify(token, secret);
+  } catch (e) {
+    return null;
+  }
+  const Model = MODELS[decoded.userType];
+  if (!Model || !decoded.id) return null;
+  const user = await Model.findById(decoded.id);
+  if (!user) return null;
+  if ((user.tokenVersion || 0) !== (decoded.tv || 0)) return null;
+  if (!isAccountActive(user)) return { inactive: true };
+  user.userType = decoded.userType;
+  return { user, userType: decoded.userType };
+};
 
 /**
- * Protect routes (JWT token required)
+ * Requires a valid session. Deactivated / deleted / suspended accounts and sessions issued before
+ * a password change are rejected on every request, not just at login.
  */
 const protect = async (req, res, next) => {
-  try {
-    let token;
-
-    if (
-      req.headers.authorization &&
-      req.headers.authorization.startsWith("Bearer")
-    ) {
-      token = req.headers.authorization.split(" ")[1];
-    }
-
-    if (!token) {
-      return res.status(401).json({
-        success: false,
-        message: "Not authorized, token missing",
-      });
-    }
-
-    // Verify token
-    const secret = process.env.JWT_SECRET;
-    if (!secret) throw new Error("JWT_SECRET is not set");
-    const decoded = jwt.verify(token, secret);
-
-    // Try finding user across Farmer, Admin, Partner models based on role or id
-    let user = null;
-    if (decoded.role === "ADMIN" || decoded.role === "SUPER_ADMIN" || decoded.userType === "admin") {
-      user = await Admin.findById(decoded.id).select("-password");
-      if (user) user.userType = "admin";
-    } else if (decoded.userType === "partner") {
-      user = await Partner.findById(decoded.id).select("-password");
-      if (user) user.userType = "partner";
-    } else {
-      // Default to Farmer or general lookup
-      user = await Farmer.findById(decoded.id).select("-password");
-      if (user) {
-        user.userType = "farmer";
-      } else {
-        user = await Admin.findById(decoded.id).select("-password");
-        if (user) {
-          user.userType = "admin";
-        } else {
-          user = await Partner.findById(decoded.id).select("-password");
-          if (user) user.userType = "partner";
-        }
-      }
-    }
-
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: "User not found or account inactive",
-      });
-    }
-
-    req.user = user;
-    next();
-  } catch (error) {
-    return res.status(401).json({
-      success: false,
-      message: "Not authorized, token invalid or expired",
-    });
+  const token = extractToken(req);
+  if (!token) {
+    return res.status(401).json({ success: false, code: 'AUTH_TOKEN_MISSING', message: t(req, 'AUTH_TOKEN_MISSING') });
   }
+  const resolved = await resolveUser(token);
+  if (!resolved) {
+    return res.status(401).json({ success: false, code: 'AUTH_TOKEN_INVALID', message: t(req, 'AUTH_TOKEN_INVALID') });
+  }
+  if (resolved.inactive) {
+    return res.status(401).json({ success: false, code: 'AUTH_ACCOUNT_INACTIVE', message: t(req, 'AUTH_ACCOUNT_INACTIVE') });
+  }
+  req.user = resolved.user;
+  req.userType = resolved.userType;
+  next();
 };
 
-/**
- * Admin only access
- */
-const adminOnly = (req, res, next) => {
-  if (
-    req.user &&
-    (req.user.userType === "admin" ||
-      ["SUPER_ADMIN", "ADMIN", "MODERATOR"].includes(req.user.role))
-  ) {
-    next();
-  } else {
-    return res.status(403).json({
-      success: false,
-      message: "Admin access only",
-    });
+/** Attaches req.user when a valid token is present; otherwise continues anonymously. */
+const optionalAuth = async (req, res, next) => {
+  const token = extractToken(req);
+  if (token) {
+    const resolved = await resolveUser(token);
+    if (resolved && !resolved.inactive) {
+      req.user = resolved.user;
+      req.userType = resolved.userType;
+    }
   }
+  next();
 };
 
-/**
- * Super Admin only access
- */
+const deny = async (req, res, key) => {
+  await audit(req, {
+    action: 'ACCESS_DENIED',
+    entityType: 'AUTH',
+    reason: `${req.method} ${req.originalUrl}`,
+    metadata: { required: key },
+  });
+  return res.status(403).json({ success: false, code: key, message: t(req, key) });
+};
+
+const requireUserType = (userType, key) => (req, res, next) => {
+  if (req.userType === userType) return next();
+  return deny(req, res, key);
+};
+
+const farmerOnly = requireUserType('farmer', 'AUTH_ROLE_FARMER');
+const partnerOnly = requireUserType('partner', 'AUTH_ROLE_PARTNER');
+const adminOnly = requireUserType('admin', 'AUTH_ROLE_ADMIN');
+
 const superAdminOnly = (req, res, next) => {
-  if (req.user && req.user.role === "SUPER_ADMIN") {
-    next();
-  } else {
-    return res.status(403).json({
-      success: false,
-      message: "Only the Super Admin can perform this action",
-    });
-  }
+  if (req.userType === 'admin' && req.user.role === 'SUPER_ADMIN') return next();
+  return deny(req, res, 'AUTH_SUPER_ADMIN_ONLY');
 };
 
-/**
- * Farmer only access
- */
-const farmerOnly = (req, res, next) => {
-  if (req.user && req.user.userType === "farmer") {
-    next();
-  } else {
-    return res.status(403).json({
-      success: false,
-      message: "Farmer access required",
-    });
-  }
-};
-
-/**
- * Partner/Agent only access
- */
-const partnerOnly = (req, res, next) => {
-  if (req.user && req.user.userType === "partner") {
-    next();
-  } else {
-    return res.status(403).json({
-      success: false,
-      message: "Partner access required",
-    });
-  }
+/** Admin holding the given permission (the Super Admin holds all). */
+const requirePermission = (...permissions) => (req, res, next) => {
+  if (req.userType === 'admin' && permissions.some((p) => hasPermission(req.user, p))) return next();
+  return deny(req, res, 'AUTH_FORBIDDEN');
 };
 
 module.exports = {
   protect,
-  adminOnly,
-  superAdminOnly,
+  optionalAuth,
   farmerOnly,
   partnerOnly,
+  adminOnly,
+  superAdminOnly,
+  requirePermission,
+  signToken,
+  effectivePermissions,
+  MODELS,
 };

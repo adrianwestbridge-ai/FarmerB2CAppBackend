@@ -1,212 +1,179 @@
-const Product = require('../models/Product.js');
+const mongoose = require('mongoose');
+const Product = require('../models/Product');
+const Category = require('../models/Category');
+const { AppError } = require('../utils/i18n');
+const { audit } = require('../utils/audit');
+const { hasPermission, PERMISSIONS } = require('../utils/permissions');
+const { requireValidId, escapeRegex, cleanText, toMoney } = require('../utils/validators');
+const { withPricing } = require('../services/pricingService');
 
-// @desc    Get all products (with optional search, category filter, and feature filter)
-// @route   GET /api/products
+const canManage = (req) => req.userType === 'admin' && hasPermission(req.user, PERMISSIONS.PRODUCTS_MANAGE);
+
+// @route GET /api/products
 exports.getProducts = async (req, res) => {
-  try {
-    const { category, categoryId, search, isFeatured, includeInactive, isActive, limit = 50, page = 1 } = req.query;
+  const { category, categoryId, search, isFeatured, includeInactive, isActive } = req.query;
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 100));
+  const page = Math.max(1, Number(req.query.page) || 1);
 
-    let filter = {};
-    if (isActive === 'true') {
-      filter.isActive = true;
-    } else if (isActive === 'false') {
-      filter.isActive = false;
-    } else if (includeInactive !== 'true') {
-      filter.isActive = true;
-    }
-    // else: includeInactive=true with no explicit isActive -> return both active and inactive
-
-    const selectedCategory = categoryId || category;
-    if (selectedCategory) {
-      filter.$or = [
-        { category: selectedCategory },
-        { categoryId: selectedCategory }
-      ];
-    }
-
-    if (isFeatured === 'true') {
-      filter.isFeatured = true;
-    }
-
-    if (search) {
-      filter.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } }
-      ];
-    }
-
-    const skip = (page - 1) * limit;
-
-    const products = await Product.find(filter)
-      .populate('category', 'name imageUrl')
-      .sort({ createdAt: -1 })
-      .skip(Number(skip))
-      .limit(Number(limit));
-
-    const total = await Product.countDocuments(filter);
-
-    res.status(200).json({
-      success: true,
-      count: products.length,
-      total,
-      page: Number(page),
-      pages: Math.ceil(total / limit),
-      data: products,
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+  const filter = {};
+  // Inactive products are only visible to admins who manage products.
+  if (canManage(req) && (includeInactive === 'true' || isActive === 'false')) {
+    if (isActive === 'false') filter.isActive = false;
+  } else {
+    filter.isActive = true;
   }
+
+  const and = [];
+  const selectedCategory = categoryId || category;
+  if (selectedCategory) {
+    const or = [{ categoryId: selectedCategory }];
+    if (mongoose.Types.ObjectId.isValid(selectedCategory)) or.push({ category: selectedCategory });
+    and.push({ $or: or });
+  }
+  if (isFeatured === 'true') filter.isFeatured = true;
+  if (search) {
+    const rx = new RegExp(escapeRegex(cleanText(search, 60)), 'i');
+    and.push({ $or: [{ name: rx }, { nameHi: rx }, { description: rx }] });
+  }
+  if (and.length) filter.$and = and;
+
+  const [products, total] = await Promise.all([
+    Product.find(filter).populate('category', 'name imageUrl').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit),
+    Product.countDocuments(filter),
+  ]);
+
+  res.status(200).json({
+    success: true,
+    count: products.length,
+    total,
+    page,
+    pages: Math.ceil(total / limit),
+    data: await withPricing(products),
+  });
 };
 
-// @desc    Get single product details
-// @route   GET /api/products/:id
+// @route GET /api/products/:id
 exports.getProductById = async (req, res) => {
-  try {
-    const product = await Product.findById(req.params.id).populate('category', 'name imageUrl');
-
-    if (!product) {
-      return res.status(404).json({ success: false, message: 'Product not found' });
-    }
-
-    res.status(200).json({ success: true, data: product });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+  const product = await Product.findById(requireValidId(req.params.id)).populate('category', 'name imageUrl');
+  if (!product || (!product.isActive && !canManage(req))) throw new AppError(404, 'PRODUCT_NOT_FOUND');
+  res.status(200).json({ success: true, data: await withPricing(product) });
 };
 
-// @desc    Create a new product (Admin)
-// @route   POST /api/products
+// Whitelisted, validated product fields from an admin request.
+const productFields = async (body, existing) => {
+  const out = {};
+  const str = (key, max) => { if (body[key] !== undefined) out[key] = cleanText(body[key], max); };
+
+  if (body.name !== undefined || body.title !== undefined) {
+    out.name = cleanText(body.name !== undefined ? body.name : body.title, 150);
+    if (!out.name) throw new AppError(400, 'VALIDATION_FAILED');
+  }
+  str('nameHi', 150);
+  str('description', 3000);
+  str('descriptionHi', 3000);
+  str('dosageInstructions', 1000);
+  str('dosageInstructionsHi', 1000);
+  str('videoUrl', 1000);
+  str('pdfUrl', 1000);
+  str('pdfLabelUrl', 1000);
+
+  if (body.images !== undefined || body.imageUrls !== undefined) {
+    const imgs = (Array.isArray(body.images) ? body.images : body.imageUrls || []).map((u) => cleanText(u, 2000)).filter(Boolean).slice(0, 10);
+    out.images = imgs;
+    out.imageUrls = imgs;
+  }
+
+  if (body.unit !== undefined) {
+    if (!Product.UNITS.includes(body.unit)) throw new AppError(400, 'VALIDATION_FAILED');
+    out.unit = body.unit;
+  }
+  if (body.unitQuantity !== undefined) {
+    const uq = Number(body.unitQuantity);
+    if (!Number.isFinite(uq) || uq <= 0) throw new AppError(400, 'VALIDATION_FAILED');
+    out.unitQuantity = uq;
+  }
+
+  // Pricing: selling price must be > 0 and ≤ MRP.
+  const price = body.price !== undefined ? toMoney(body.price) : (existing ? existing.price : undefined);
+  const mrp = body.mrp !== undefined ? toMoney(body.mrp) : (existing ? existing.mrp : price);
+  if (body.price !== undefined || body.mrp !== undefined || !existing) {
+    if (!(price > 0) || !(mrp > 0) || price > mrp) throw new AppError(400, 'PRODUCT_PRICE_INVALID');
+    out.price = price;
+    out.mrp = mrp;
+  }
+
+  const stock = body.stockQuantity !== undefined ? body.stockQuantity : (body.stock !== undefined ? body.stock : body.quantityAvailable);
+  if (stock !== undefined) {
+    const qty = Math.floor(Number(stock));
+    if (!Number.isFinite(qty) || qty < 0) throw new AppError(400, 'VALIDATION_FAILED');
+    out.stockQuantity = qty;
+    out.quantityAvailable = qty;
+  }
+
+  if (body.isActive !== undefined) out.isActive = body.isActive === true || body.isActive === 'true';
+  if (body.isFeatured !== undefined) out.isFeatured = body.isFeatured === true || body.isFeatured === 'true';
+
+  if (body.category !== undefined && body.category !== null && body.category !== '') {
+    const cat = String(body.category);
+    if (mongoose.Types.ObjectId.isValid(cat) && cat.length === 24) {
+      const found = await Category.findById(cat);
+      if (found) { out.category = found._id; out.categoryId = found.name; }
+    } else {
+      const found = await Category.findOne({ name: new RegExp(`^${escapeRegex(cat)}$`, 'i') });
+      out.categoryId = found ? found.name : cleanText(cat, 60);
+      if (found) out.category = found._id;
+    }
+  }
+  return out;
+};
+
+// @route POST /api/products
 exports.createProduct = async (req, res) => {
-  try {
-    const mongoose = require('mongoose');
-    const Category = require('../models/Category.js');
-
-    const body = { ...req.body };
-
-    // Support 'title' as an alias for 'name'
-    if (!body.name && body.title) {
-      body.name = body.title;
-    }
-
-    // Handle flexible stock fields (stock vs stockQuantity vs quantityAvailable)
-    if (body.stock !== undefined) {
-      if (body.stockQuantity === undefined) body.stockQuantity = Number(body.stock);
-      if (body.quantityAvailable === undefined) body.quantityAvailable = Number(body.stock);
-    }
-
-    // Handle category field (can be ObjectId string, category name string, or categoryId)
-    if (body.category && typeof body.category === 'string') {
-      if (mongoose.Types.ObjectId.isValid(body.category)) {
-        // Valid ObjectId string
-      } else {
-        // Category name passed as string (e.g. "Fertilizers")
-        body.categoryId = body.category;
-        const foundCat = await Category.findOne({ name: new RegExp(`^${body.category}$`, 'i') });
-        if (foundCat) {
-          body.category = foundCat._id;
-        } else {
-          delete body.category; // Remove string to avoid BSON error on ObjectId field
-        }
-      }
-    }
-
-    const product = await Product.create(body);
-    res.status(201).json({ success: true, data: product });
-  } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
-  }
+  const fields = await productFields(req.body || {}, null);
+  if (!fields.name) throw new AppError(400, 'VALIDATION_FAILED');
+  const product = await Product.create(fields);
+  await audit(req, { action: 'PRODUCT_CREATED', entityType: 'PRODUCT', entityId: product._id, entityRef: product.name, metadata: { mrp: product.mrp, price: product.price } });
+  res.status(201).json({ success: true, data: await withPricing(product) });
 };
 
-// @desc    Update product details (Admin)
-// @route   PUT /api/products/:id
+// @route PUT /api/products/:id
 exports.updateProduct = async (req, res) => {
-  try {
-    const mongoose = require('mongoose');
-    const Category = require('../models/Category.js');
-
-    const body = { ...req.body };
-
-    if (!body.name && body.title) {
-      body.name = body.title;
-    }
-
-    if (body.stock !== undefined) {
-      if (body.stockQuantity === undefined) body.stockQuantity = Number(body.stock);
-      if (body.quantityAvailable === undefined) body.quantityAvailable = Number(body.stock);
-    }
-
-    if (body.category && typeof body.category === 'string') {
-      if (mongoose.Types.ObjectId.isValid(body.category)) {
-        // Valid ObjectId
-      } else {
-        body.categoryId = body.category;
-        const foundCat = await Category.findOne({ name: new RegExp(`^${body.category}$`, 'i') });
-        if (foundCat) {
-          body.category = foundCat._id;
-        } else {
-          delete body.category;
-        }
-      }
-    }
-
-    const product = await Product.findByIdAndUpdate(req.params.id, body, {
-      new: true,
-      runValidators: true,
-    });
-
-    if (!product) {
-      return res.status(404).json({ success: false, message: 'Product not found' });
-    }
-
-    res.status(200).json({ success: true, data: product });
-  } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
-  }
+  const product = await Product.findById(requireValidId(req.params.id));
+  if (!product) throw new AppError(404, 'PRODUCT_NOT_FOUND');
+  const before = { mrp: product.mrp, price: product.price, isActive: product.isActive, quantityAvailable: product.quantityAvailable };
+  const fields = await productFields(req.body || {}, product);
+  Object.assign(product, fields);
+  await product.save();
+  await audit(req, {
+    action: 'PRODUCT_UPDATED',
+    entityType: 'PRODUCT',
+    entityId: product._id,
+    entityRef: product.name,
+    metadata: { before, after: { mrp: product.mrp, price: product.price, isActive: product.isActive, quantityAvailable: product.quantityAvailable } },
+  });
+  res.status(200).json({ success: true, data: await withPricing(product) });
 };
 
-// @desc    Update stock quantity directly (Admin / Quick Stepper)
-// @route   PATCH /api/products/:id/stock
+// @route PATCH /api/products/:id/stock  { stockQuantity }
 exports.updateStock = async (req, res) => {
-  try {
-    const { stockQuantity, quantityAvailable } = req.body;
-    const qty = quantityAvailable !== undefined ? quantityAvailable : stockQuantity;
-
-    if (qty === undefined || qty < 0) {
-      return res.status(400).json({ success: false, message: 'Valid stock quantity required' });
-    }
-
-    const product = await Product.findByIdAndUpdate(
-      req.params.id,
-      { stockQuantity: qty, quantityAvailable: qty },
-      { new: true }
-    );
-
-    if (!product) {
-      return res.status(404).json({ success: false, message: 'Product not found' });
-    }
-
-    res.status(200).json({ success: true, data: product });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+  const qty = Math.floor(Number((req.body || {}).stockQuantity ?? (req.body || {}).quantityAvailable));
+  if (!Number.isFinite(qty) || qty < 0) throw new AppError(400, 'VALIDATION_FAILED');
+  const product = await Product.findById(requireValidId(req.params.id));
+  if (!product) throw new AppError(404, 'PRODUCT_NOT_FOUND');
+  const before = product.quantityAvailable;
+  product.stockQuantity = qty;
+  product.quantityAvailable = qty;
+  await product.save();
+  await audit(req, { action: 'PRODUCT_STOCK_UPDATED', entityType: 'PRODUCT', entityId: product._id, entityRef: product.name, metadata: { before, after: qty } });
+  res.status(200).json({ success: true, data: await withPricing(product) });
 };
 
-// @desc    Soft delete / Deactivate a product (Admin)
-// @route   DELETE /api/products/:id
+// @route DELETE /api/products/:id — soft delete (deactivate); order history keeps its snapshot.
 exports.deleteProduct = async (req, res) => {
-  try {
-    const product = await Product.findByIdAndUpdate(
-      req.params.id,
-      { isActive: false },
-      { new: true }
-    );
-
-    if (!product) {
-      return res.status(404).json({ success: false, message: 'Product not found' });
-    }
-
-    res.status(200).json({ success: true, message: 'Product deactivated successfully' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+  const product = await Product.findById(requireValidId(req.params.id));
+  if (!product) throw new AppError(404, 'PRODUCT_NOT_FOUND');
+  product.isActive = false;
+  await product.save();
+  await audit(req, { action: 'PRODUCT_DEACTIVATED', entityType: 'PRODUCT', entityId: product._id, entityRef: product.name });
+  res.status(200).json({ success: true, data: await withPricing(product) });
 };

@@ -1,288 +1,117 @@
-const mongoose = require('mongoose');
 const CartItem = require('../models/CartItem');
 const Product = require('../models/Product');
+const { AppError } = require('../utils/i18n');
+const { requireValidId, isValidId } = require('../utils/validators');
+const { priceCart } = require('../services/pricingService');
 
-// Safe helper to extract owner_id
-const getOwnerId = (req) => {
-  if (!req) return null;
-  if (req.user) {
-    return req.user.owner_id || (req.user._id ? req.user._id.toString() : null);
+// The cart always belongs to the logged-in farmer; any owner_id sent by the client is ignored.
+const ownerOf = (req) => req.user.owner_id;
+
+const MAX_QTY = 1000;
+
+const loadCart = async (owner_id) => {
+  const items = await CartItem.find({ owner_id }).sort({ addedAt: 1, createdAt: 1 });
+
+  // Consolidate duplicates and drop items whose product no longer exists.
+  const byProduct = new Map();
+  const removeIds = [];
+  const productIds = items.map((i) => i.productId);
+  const existing = new Set((await Product.find({ _id: { $in: productIds } }).select('_id')).map((p) => String(p._id)));
+  for (const item of items) {
+    const pid = String(item.productId);
+    if (!existing.has(pid)) { removeIds.push(item._id); continue; }
+    if (byProduct.has(pid)) {
+      const keep = byProduct.get(pid);
+      keep.quantity = Math.min(MAX_QTY, keep.quantity + item.quantity);
+      await keep.save();
+      removeIds.push(item._id);
+    } else {
+      byProduct.set(pid, item);
+    }
   }
-  const body = req.body || {};
-  const query = req.query || {};
-  const params = req.params || {};
-
-  return (
-    body.owner_id ||
-    query.owner_id ||
-    params.owner_id ||
-    body.farmerId ||
-    query.farmerId ||
-    params.farmerId ||
-    null
-  );
+  if (removeIds.length) await CartItem.deleteMany({ _id: { $in: removeIds } });
+  return [...byProduct.values()];
 };
 
-// @desc    Get user's cart items
-// @route   GET /api/cart
-exports.getCart = async (req, res) => {
-  try {
-    const owner_id = getOwnerId(req);
-    if (!owner_id) {
-      return res.status(400).json({ success: false, message: 'owner_id or farmerId is required' });
-    }
-
-    const items = await CartItem.find({ owner_id })
-      .populate({
-        path: 'productId',
-        populate: { path: 'category', select: 'name' },
-      })
-      .sort({ addedAt: 1, createdAt: 1 });
-
-    // Clean up orphaned cart items and consolidate duplicate items for same product
-    const validItems = [];
-    const orphanedIds = [];
-
-    for (const item of items) {
-      if (item.productId) {
-        validItems.push(item);
-      } else {
-        orphanedIds.push(item._id);
-      }
-    }
-
-    if (orphanedIds.length > 0) {
-      await CartItem.deleteMany({ _id: { $in: orphanedIds } });
-    }
-
-    // Consolidate duplicates by productId
-    const uniqueMap = {};
-    const duplicateIds = [];
-
-    for (const item of validItems) {
-      const pid = item.productId._id ? item.productId._id.toString() : item.productId.toString();
-      if (uniqueMap[pid]) {
-        uniqueMap[pid].quantity += item.quantity;
-        duplicateIds.push(item._id);
-      } else {
-        uniqueMap[pid] = item;
-      }
-    }
-
-    if (duplicateIds.length > 0) {
-      await CartItem.deleteMany({ _id: { $in: duplicateIds } });
-    }
-
-    const finalCartItems = Object.values(uniqueMap);
-
-    res.status(200).json({
-      success: true,
-      count: finalCartItems.length,
-      data: finalCartItems,
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+const respondWithCart = async (req, res, status = 200) => {
+  const items = await loadCart(ownerOf(req));
+  let quote = null;
+  if (items.length) {
+    quote = await priceCart(items.map((i) => ({ productId: i.productId, quantity: i.quantity })), { strict: false });
   }
-
+  res.status(status).json({
+    success: true,
+    count: items.length,
+    data: items.map((i) => ({ _id: i._id, productId: i.productId, quantity: i.quantity })),
+    quote,
+  });
 };
 
-// @desc    Add item to cart or increment
-// @route   POST /api/cart
+// @route GET /api/cart
+exports.getCart = async (req, res) => respondWithCart(req, res);
+
+// @route POST /api/cart  { productId, quantity }  — adds to the existing quantity
 exports.addToCart = async (req, res) => {
-  try {
-    const body = req.body || {};
-    const { productId, quantity = 1 } = body;
-    const owner_id = getOwnerId(req);
+  const { productId } = req.body || {};
+  const quantity = Math.floor(Number((req.body || {}).quantity ?? 1));
+  requireValidId(productId);
+  if (!Number.isFinite(quantity) || quantity < 1) throw new AppError(400, 'CART_QTY_INVALID');
 
-    if (!owner_id || !productId) {
-      return res.status(400).json({ success: false, message: 'owner_id and productId are required' });
-    }
+  const product = await Product.findById(productId);
+  if (!product) throw new AppError(404, 'PRODUCT_NOT_FOUND');
+  if (!product.isActive) throw new AppError(400, 'PRODUCT_INACTIVE', { name: product.name });
 
-    // 1. Verify productId format
-    if (!mongoose.Types.ObjectId.isValid(productId)) {
-      return res.status(404).json({
-        success: false,
-        message: 'Invalid product ID format. Product does not exist in database.',
-      });
-    }
-
-    // 2. Verify product exists in Products collection
-    const product = await Product.findById(productId);
-    if (!product) {
-      return res.status(404).json({
-        success: false,
-        message: 'Product not found in database. Cannot add to cart.',
-      });
-    }
-
-    if (product.isActive === false) {
-      return res.status(400).json({
-        success: false,
-        message: 'Product is currently inactive and cannot be added to cart.',
-      });
-    }
-
-    // 3. Update existing item or create new item
-    let existingItem = await CartItem.findOne({ owner_id, productId });
-    if (existingItem) {
-      existingItem.quantity += Number(quantity);
-      await existingItem.save();
-      await existingItem.populate({ path: 'productId', populate: { path: 'category', select: 'name' } });
-      return res.status(200).json({
-        success: true,
-        message: 'Cart quantity updated',
-        data: existingItem,
-      });
-    }
-
-    const newItem = await CartItem.create({
-      owner_id,
-      productId,
-      quantity: Math.max(1, Number(quantity)),
-    });
-
-    await newItem.populate({ path: 'productId', populate: { path: 'category', select: 'name' } });
-
-    res.status(201).json({
-      success: true,
-      message: 'Item added to cart',
-      data: newItem,
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+  const owner_id = ownerOf(req);
+  const existing = await CartItem.findOne({ owner_id, productId });
+  const target = Math.min(MAX_QTY, (existing ? existing.quantity : 0) + quantity);
+  if (target > (product.quantityAvailable || 0)) {
+    throw new AppError(400, 'PRODUCT_OUT_OF_STOCK', { name: product.name, available: product.quantityAvailable || 0 });
   }
+  if (existing) {
+    existing.quantity = target;
+    await existing.save();
+  } else {
+    await CartItem.create({ owner_id, productId, quantity: target });
+  }
+  return respondWithCart(req, res, existing ? 200 : 201);
 };
 
-// @desc    Update cart item quantity (+, -, or direct quantity value)
-// @route   PUT /api/cart/:id OR PATCH /api/cart/:id
-exports.updateCartQuantity = async (req, res) => {
-  try {
-    const params = req.params || {};
-    const body = req.body || {};
-    const id = params.id; // Can be CartItem _id OR productId
-    const { quantity, delta, action } = body;
-    const owner_id = getOwnerId(req);
+// @route PUT /api/cart/:productId  { quantity }  — sets the quantity (0 removes)
+exports.setQuantity = async (req, res) => {
+  const productId = requireValidId(req.params.productId);
+  const quantity = Math.floor(Number((req.body || {}).quantity));
+  if (!Number.isFinite(quantity) || quantity < 0) throw new AppError(400, 'CART_QTY_INVALID');
+  const owner_id = ownerOf(req);
 
-    let item = null;
-
-    if (id && mongoose.Types.ObjectId.isValid(id)) {
-      item = await CartItem.findById(id);
-    }
-
-    if (!item && owner_id && id) {
-      item = await CartItem.findOne({ owner_id, productId: id });
-    }
-
-    if (!item) {
-      return res.status(404).json({ success: false, message: 'Cart item not found in cart' });
-    }
-
-    // Verify underlying product still exists
-    if (item.productId && mongoose.Types.ObjectId.isValid(item.productId)) {
-      const product = await Product.findById(item.productId);
-      if (!product) {
-        await CartItem.findByIdAndDelete(item._id);
-        return res.status(404).json({
-          success: false,
-          removed: true,
-          message: 'Product no longer exists in database. Removed from cart.',
-        });
-      }
-    }
-
-    // Calculate new target quantity
-    let newQuantity = item.quantity;
-
-    if (quantity !== undefined) {
-      newQuantity = Number(quantity);
-    } else if (delta !== undefined) {
-      newQuantity = item.quantity + Number(delta);
-    } else if (action === 'increment') {
-      newQuantity = item.quantity + 1;
-    } else if (action === 'decrement') {
-      newQuantity = item.quantity - 1;
-    }
-
-    // If target quantity is 0 or negative, remove item from cart
-    if (newQuantity <= 0) {
-      await CartItem.findByIdAndDelete(item._id);
-      return res.status(200).json({
-        success: true,
-        removed: true,
-        message: 'Item removed from cart',
-        data: { _id: item._id, productId: item.productId, quantity: 0 },
-      });
-    }
-
-    item.quantity = newQuantity;
-    await item.save();
-    await item.populate({ path: 'productId', populate: { path: 'category', select: 'name' } });
-
-    res.status(200).json({
-      success: true,
-      removed: false,
-      message: 'Cart quantity updated successfully',
-      data: item,
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+  if (quantity === 0) {
+    await CartItem.deleteMany({ owner_id, productId });
+    return respondWithCart(req, res);
   }
+
+  const product = await Product.findById(productId);
+  if (!product) throw new AppError(404, 'PRODUCT_NOT_FOUND');
+  if (!product.isActive) throw new AppError(400, 'PRODUCT_INACTIVE', { name: product.name });
+  if (quantity > (product.quantityAvailable || 0)) {
+    throw new AppError(400, 'PRODUCT_OUT_OF_STOCK', { name: product.name, available: product.quantityAvailable || 0 });
+  }
+  await CartItem.findOneAndUpdate(
+    { owner_id, productId },
+    { $set: { quantity: Math.min(MAX_QTY, quantity) }, $setOnInsert: { addedAt: new Date() } },
+    { upsert: true },
+  );
+  return respondWithCart(req, res);
 };
 
-// @desc    Remove single cart item (via Delete button)
-// @route   DELETE /api/cart/:id OR POST /api/cart/remove
+// @route DELETE /api/cart/:productId
 exports.removeCartItem = async (req, res) => {
-  try {
-    const params = req.params || {};
-    const body = req.body || {};
-    const query = req.query || {};
-
-    const id = params.id || body.id || body.cartItemId;
-    const productId = body.productId || query.productId;
-    const owner_id = getOwnerId(req);
-
-    let item = null;
-
-    if (id && mongoose.Types.ObjectId.isValid(id)) {
-      item = await CartItem.findByIdAndDelete(id);
-    }
-
-    if (!item && owner_id && (productId || id)) {
-      const targetProdId = productId || id;
-      item = await CartItem.findOneAndDelete({ owner_id, productId: targetProdId });
-    }
-
-    if (!item) {
-      return res.status(404).json({ success: false, message: 'Cart item not found' });
-    }
-
-    res.status(200).json({
-      success: true,
-      removed: true,
-      message: 'Item removed from cart successfully',
-      data: { _id: item._id },
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+  const id = req.params.productId;
+  if (!isValidId(id)) throw new AppError(400, 'INVALID_ID');
+  await CartItem.deleteMany({ owner_id: ownerOf(req), $or: [{ productId: id }, { _id: id }] });
+  return respondWithCart(req, res);
 };
 
-// @desc    Clear entire cart for user
-// @route   DELETE /api/cart
+// @route DELETE /api/cart
 exports.clearCart = async (req, res) => {
-  try {
-    const owner_id = getOwnerId(req);
-    if (!owner_id) {
-      return res.status(400).json({ success: false, message: 'owner_id or farmerId required' });
-    }
-
-    await CartItem.deleteMany({ owner_id });
-
-    res.status(200).json({
-      success: true,
-      message: 'Cart cleared successfully',
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+  await CartItem.deleteMany({ owner_id: ownerOf(req) });
+  return respondWithCart(req, res);
 };

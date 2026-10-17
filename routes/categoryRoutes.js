@@ -6,14 +6,15 @@ const {
   updateCategory,
   deleteCategory,
 } = require('../controllers/categoryController');
-const { protect, adminOnly } = require('../middleware/authMiddleware');
+const { protect, requirePermission } = require('../middleware/authMiddleware');
+const { PERMISSIONS: P } = require('../utils/permissions');
 
 const router = express.Router();
 
 router.get('/', getCategories);
 router.get('/:id', getCategoryById);
-router.post('/', protect, adminOnly, createCategory);
-router.put('/:id', protect, adminOnly, updateCategory);
-router.delete('/:id', protect, adminOnly, deleteCategory);
+router.post('/', protect, requirePermission(P.PRODUCTS_MANAGE), createCategory);
+router.put('/:id', protect, requirePermission(P.PRODUCTS_MANAGE), updateCategory);
+router.delete('/:id', protect, requirePermission(P.PRODUCTS_MANAGE), deleteCategory);
 
 module.exports = router;
