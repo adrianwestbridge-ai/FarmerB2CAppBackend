@@ -29,8 +29,8 @@ exports.getCategoryById = async (req, res) => {
 // @route   POST /api/categories
 exports.createCategory = async (req, res) => {
   try {
-    const { name, description, imageUrl } = req.body || {};
-    const category = await Category.create({ name, description, imageUrl });
+    const { name, nameHi, description, imageUrl } = req.body || {};
+    const category = await Category.create({ name, nameHi, description, imageUrl });
     res.status(201).json({ success: true, data: category });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
@@ -41,8 +41,8 @@ exports.createCategory = async (req, res) => {
 // @route   PUT /api/categories/:id
 exports.updateCategory = async (req, res) => {
   try {
-    const { name, description, imageUrl, isActive } = req.body || {};
-    const updates = Object.fromEntries(Object.entries({ name, description, imageUrl, isActive }).filter(([, v]) => v !== undefined));
+    const { name, nameHi, description, imageUrl, isActive } = req.body || {};
+    const updates = Object.fromEntries(Object.entries({ name, nameHi, description, imageUrl, isActive }).filter(([, v]) => v !== undefined));
     const category = await Category.findByIdAndUpdate(req.params.id, updates, {
       new: true,
       runValidators: true,

@@ -250,36 +250,42 @@ const seedData = async () => {
     const categories = await Category.create([
       {
         name: 'Seeds & Hybrid Varieties',
+        nameHi: 'बीज और हाइब्रिड किस्में',
         imageUrl: 'https://images.unsplash.com/photo-1530507629858-e4977d30e9e0?w=600&auto=format&fit=crop',
         description: 'Certified high-yield hybrid & organic seeds for vegetables, grains, and cash crops.',
         isActive: true,
       },
       {
         name: 'Fertilizers & Plant Nutrition',
+        nameHi: 'उर्वरक और पौध पोषण',
         imageUrl: 'https://images.unsplash.com/photo-1625246333195-78d9c38ad449?w=600&auto=format&fit=crop',
         description: 'Macro & micro nutrients, water-soluble fertilizers, NPK, and bio-stimulants.',
         isActive: true,
       },
       {
         name: 'Crop Protection & Pesticides',
+        nameHi: 'फसल सुरक्षा और कीटनाशक',
         imageUrl: 'https://images.unsplash.com/photo-1592982537447-7440770cbfc9?w=600&auto=format&fit=crop',
         description: 'Eco-friendly bio-fungicides, insecticides, herbicides, and neem formulations.',
         isActive: true,
       },
       {
         name: 'Farm Tools & Machinery',
+        nameHi: 'खेती के औज़ार और मशीनें',
         imageUrl: 'https://images.unsplash.com/photo-1595838768222-108a74e53b69?w=600&auto=format&fit=crop',
         description: 'Knapsack sprayers, soil testing kits, pruning tools, and solar pest traps.',
         isActive: true,
       },
       {
         name: 'Organic Farming & Bio-Inputs',
+        nameHi: 'जैविक खेती और जैव-उत्पाद',
         imageUrl: 'https://images.unsplash.com/photo-1585314062340-f1a5a7c9328d?w=600&auto=format&fit=crop',
         description: '100% natural organic compost, vermicompost, Trichoderma, and bio-fertilizers.',
         isActive: true,
       },
       {
         name: 'Irrigation & Water Management',
+        nameHi: 'सिंचाई और जल प्रबंधन',
         imageUrl: 'https://images.unsplash.com/photo-1563514227147-6d2ff665a6a0?w=600&auto=format&fit=crop',
         description: 'Drip irrigation kits, sprinklers, pressure hoses, and water pumps.',
         isActive: true,

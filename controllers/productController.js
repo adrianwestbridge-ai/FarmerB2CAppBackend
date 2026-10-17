@@ -38,7 +38,7 @@ exports.getProducts = async (req, res) => {
   if (and.length) filter.$and = and;
 
   const [products, total] = await Promise.all([
-    Product.find(filter).populate('category', 'name imageUrl').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit),
+    Product.find(filter).populate('category', 'name nameHi imageUrl').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit),
     Product.countDocuments(filter),
   ]);
 
@@ -54,7 +54,7 @@ exports.getProducts = async (req, res) => {
 
 // @route GET /api/products/:id
 exports.getProductById = async (req, res) => {
-  const product = await Product.findById(requireValidId(req.params.id)).populate('category', 'name imageUrl');
+  const product = await Product.findById(requireValidId(req.params.id)).populate('category', 'name nameHi imageUrl');
   if (!product || (!product.isActive && !canManage(req))) throw new AppError(404, 'PRODUCT_NOT_FOUND');
   res.status(200).json({ success: true, data: await withPricing(product) });
 };
