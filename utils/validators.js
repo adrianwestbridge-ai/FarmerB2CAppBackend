@@ -23,6 +23,16 @@ const requireValidId = (id) => {
 
 const cleanText = (value, max = 500) => String(value === undefined || value === null ? '' : value).trim().slice(0, max);
 
+// Images are either public http(s) URLs or compressed inline data URIs taken on the device.
+// Phone-local paths (file://, content://) are rejected because no one else could open them.
+const MAX_INLINE_IMAGE = 1500000;
+const cleanImage = (value) => {
+  const v = String(value || '').trim();
+  if (/^https?:\/\//i.test(v)) return v.slice(0, 2000);
+  if (/^data:image\/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(v) && v.length <= MAX_INLINE_IMAGE) return v;
+  return '';
+};
+
 const toMoney = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -51,6 +61,7 @@ module.exports = {
   isValidId,
   requireValidId,
   cleanText,
+  cleanImage,
   toMoney,
   escapeRegex,
   parseDate,

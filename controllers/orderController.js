@@ -131,7 +131,8 @@ exports.getOrders = async (req, res) => {
   // Oldest first for the approval queue, newest first otherwise.
   const sort = String(q.sort || '') === 'oldest' ? { createdAt: 1 } : { createdAt: -1 };
   const [orders, total] = await Promise.all([
-    Order.find(filter).sort(sort).skip((page - 1) * limit).limit(limit),
+    // Proof photos can be large; they are returned only by GET /orders/:id.
+    Order.find(filter).select('-deliveryProofUrl').sort(sort).skip((page - 1) * limit).limit(limit),
     Order.countDocuments(filter),
   ]);
 

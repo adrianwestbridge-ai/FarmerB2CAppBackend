@@ -6,7 +6,7 @@ const { nextNumber } = require('../models/Counter');
 const { AppError } = require('../utils/i18n');
 const { audit, actorRoleOf } = require('../utils/audit');
 const { getSettings } = require('../utils/settings');
-const { cleanText, toMoney, requireValidId } = require('../utils/validators');
+const { cleanText, cleanImage, toMoney, requireValidId } = require('../utils/validators');
 const { priceCart } = require('./pricingService');
 
 // Statuses from which the reserved stock is still held by the order (goods not handed over).
@@ -457,7 +457,7 @@ const partnerDeliver = async (req, id, body) => {
 
   order.deliveredAt = now;
   order.deliveredBy = req.user._id;
-  order.deliveryProofUrl = cleanText(body.deliveryProofUrl, 2000);
+  order.deliveryProofUrl = cleanImage(body.deliveryProofUrl);
   order.deliveryNote = cleanText(body.deliveryNote, 500);
   order.assignmentHistory.push({ action: 'DELIVERED', partnerId: String(req.user._id), partnerName: req.user.name, ...actorOf(req) });
   pushStatus(order, 'DELIVERED', req, order.deliveryNote || 'Delivered');

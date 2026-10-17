@@ -4,7 +4,7 @@ const Category = require('../models/Category');
 const { AppError } = require('../utils/i18n');
 const { audit } = require('../utils/audit');
 const { hasPermission, PERMISSIONS } = require('../utils/permissions');
-const { requireValidId, escapeRegex, cleanText, toMoney } = require('../utils/validators');
+const { requireValidId, escapeRegex, cleanText, cleanImage, toMoney } = require('../utils/validators');
 const { withPricing } = require('../services/pricingService');
 
 const canManage = (req) => req.userType === 'admin' && hasPermission(req.user, PERMISSIONS.PRODUCTS_MANAGE);
@@ -78,7 +78,7 @@ const productFields = async (body, existing) => {
   str('pdfLabelUrl', 1000);
 
   if (body.images !== undefined || body.imageUrls !== undefined) {
-    const imgs = (Array.isArray(body.images) ? body.images : body.imageUrls || []).map((u) => cleanText(u, 2000)).filter(Boolean).slice(0, 10);
+    const imgs = (Array.isArray(body.images) ? body.images : body.imageUrls || []).map(cleanImage).filter(Boolean).slice(0, 5);
     out.images = imgs;
     out.imageUrls = imgs;
   }

@@ -42,7 +42,8 @@ app.use("/api", rateLimit({
 if (require.main === module) connectDB();
 
 // Middlewares
-app.use(express.json({ limit: "1mb" }));
+// Allows compressed inline photos (product images, proof of delivery).
+app.use(express.json({ limit: "4mb" }));
 app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 
 // CORS Configuration (Native Android sends no Origin header; disable CORS to prevent arbitrary browser cross-origin access)

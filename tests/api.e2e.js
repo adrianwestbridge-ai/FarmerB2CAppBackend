@@ -399,6 +399,7 @@ async function login(identifier, password) {
     assert.equal(d.collectionStatus, 'COLLECTED');
     assert.equal(d.settlementStatus, 'PENDING');
     assert.equal(d.amountCollected, ctx.order1.totalAmount);
+    assert.equal(d.deliveryProofUrl, '', 'phone-local file paths are rejected');
     const farmerView = expectStatus(await call('PATCH', `/orders/${id}/cancel`, { token: ctx.farmer.token, body: { reason: 'Too late now' } }), 409);
     assert.equal(farmerView.code, 'ORDER_TRANSITION_INVALID');
   });
@@ -477,6 +478,20 @@ async function login(identifier, password) {
     expectStatus(await call('PATCH', `/orders/${o._id}/deliver`, { token: ctx.partnerA.token, body: { amountCollected: o.totalAmount } }), 200);
     cur = expectStatus(await call('GET', `/orders/${o._id}`, { token: ctx.farmer.token }), 200).data;
     assert.equal(cur.status, 'DELIVERED');
+  });
+
+  await step('proof-of-delivery photo is stored inline and kept out of order lists', async () => {
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    const o = await placeCod();
+    await approve(o._id);
+    expectStatus(await call('PATCH', `/orders/${o._id}/accept`, { token: ctx.partnerA.token }), 200);
+    expectStatus(await call('PATCH', `/orders/${o._id}/pickup`, { token: ctx.partnerA.token }), 200);
+    expectStatus(await call('PATCH', `/orders/${o._id}/deliver`, { token: ctx.partnerA.token, body: { amountCollected: o.totalAmount, deliveryProofUrl: png } }), 200);
+    const detail = expectStatus(await call('GET', `/orders/${o._id}`, { token: ctx.opsAdmin.token }), 200).data;
+    assert.equal(detail.deliveryProofUrl, png);
+    const list = expectStatus(await call('GET', `/orders?search=${o.orderNumber}`, { token: ctx.opsAdmin.token }), 200).data;
+    assert.equal(list.length, 1);
+    assert.equal(list[0].deliveryProofUrl, undefined);
   });
 
   // ═══ 5. Online payments (admin verified) & refunds ═════════════════════════
