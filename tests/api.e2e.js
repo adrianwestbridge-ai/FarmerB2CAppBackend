@@ -773,6 +773,98 @@ async function login(identifier, password) {
     assert.ok(!active.some((o) => o._id === ctx.neemOffer._id));
   });
 
+  // ═══ 10. Super Admin overview, user details & Excel ═══════════════════════
+  console.log('\n10. Super Admin overview, user details & Excel');
+
+  await step('business overview: Super Admin only (or REPORTS_VIEW), figures are consistent', async () => {
+    expectStatus(await call('GET', '/reports/overview', { token: ctx.farmer.token }), 403);
+    expectStatus(await call('GET', '/reports/overview', { token: ctx.partnerA.token }), 403);
+    const o = expectStatus(await call('GET', '/reports/overview', { token: ctx.superAdmin.token }), 200).data;
+    for (const p of ['today', 'month', 'allTime']) {
+      assert.ok(o[p].orders >= o[p].delivered, `${p}: delivered <= orders`);
+      assert.ok(o[p].sales <= o[p].orderValue + 0.01, `${p}: sales <= order value`);
+    }
+    assert.ok(o.allTime.orders >= o.month.orders && o.month.orders >= o.today.orders);
+    assert.ok(o.people.farmers.total >= o.people.farmers.active && o.people.farmers.total > 0);
+    assert.ok(o.people.partners.total >= 2 && o.people.admins.total >= 3);
+    assert.ok(typeof o.attention.pendingApproval === 'number' && typeof o.attention.cashWithPartners === 'number');
+    assert.ok(Array.isArray(o.topFarmers) && o.topFarmers.length <= 5);
+    assert.ok(o.adminDecisions.some((a) => a.approved > 0), 'admin approvals this month are counted');
+  });
+
+  await step('farmer directory shows each farmer\'s orders; detail matches their order history', async () => {
+    const list = expectStatus(await call('GET', '/farmers?search=9999999999', { token: ctx.superAdmin.token }), 200).data;
+    const me = list[0];
+    assert.ok(me.stats && me.stats.orders > 0, 'list carries order stats');
+    assert.equal(me.password, undefined);
+    const detail = expectStatus(await call('GET', `/farmers/${me._id}`, { token: ctx.superAdmin.token }), 200).data;
+    const own = expectStatus(await call('GET', '/orders?limit=200', { token: ctx.farmer.token }), 200);
+    assert.equal(detail.stats.orders, own.total);
+    const active = own.data.filter((x) => !['REJECTED', 'CANCELLED'].includes(x.status));
+    assert.equal(detail.stats.orderValue, money(active.reduce((s, x) => s + x.totalAmount, 0)));
+    assert.equal(detail.stats.delivered, own.data.filter((x) => x.status === 'DELIVERED').length);
+    assert.ok(detail.orders.length === Math.min(100, own.total) && detail.orders[0].orderNumber);
+    assert.ok(detail.stats.mrpSavings >= detail.stats.discount);
+  });
+
+  await step('delivery partner detail: deliveries, cash position and handovers add up', async () => {
+    const list = expectStatus(await call('GET', '/partners', { token: ctx.superAdmin.token }), 200).data;
+    const a = list.find((p) => p.phoneNumber === '9888877777');
+    assert.ok(a.stats.delivered >= 1);
+    const d = expectStatus(await call('GET', `/partners/${a._id}`, { token: ctx.superAdmin.token }), 200).data;
+    const st = d.stats;
+    assert.equal(money(st.cashPendingHandover + st.cashSubmitted + st.cashDisputed + st.cashVerified), st.cashCollected);
+    assert.ok(d.orders.length >= st.delivered);
+    assert.ok(d.settlements.some((s) => s.settlementNumber === ctx.settlement.settlementNumber));
+    assert.equal(d.password, undefined);
+  });
+
+  await step('Excel export: single-use link, real .xlsx, admin sheets only for Super Admin', async () => {
+    const ExcelJS = require('exceljs');
+    const fetchXlsx = async (url) => {
+      const res = await fetch(url);
+      return { status: res.status, type: res.headers.get('content-type') || '', buf: Buffer.from(await res.arrayBuffer()) };
+    };
+    expectStatus(await call('POST', '/reports/export-link', { token: ctx.farmer.token, body: {} }), 403);
+    expectStatus(await call('POST', '/reports/export-link', { token: ctx.superAdmin.token, body: { from: 'not-a-date' } }), 400);
+
+    const link = expectStatus(await call('POST', '/reports/export-link', { token: ctx.superAdmin.token, body: {} }), 200).data;
+    const first = await fetchXlsx(link.url);
+    assert.equal(first.status, 200);
+    assert.ok(first.type.includes('spreadsheetml'));
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(first.buf);
+    const names = wb.worksheets.map((w) => w.name);
+    for (const n of ['Summary', 'Orders', 'Farmers', 'Delivery partners', 'Admins', 'Admin decisions', 'Settlements', 'Activity log']) {
+      assert.ok(names.includes(n), `sheet ${n}`);
+    }
+    const ordersSheet = wb.getWorksheet('Orders');
+    const all = expectStatus(await call('GET', '/reports/orders?limit=1', { token: ctx.superAdmin.token }), 200);
+    assert.equal(ordersSheet.rowCount - 1, all.total, 'every order is exported');
+
+    assert.equal((await fetchXlsx(link.url)).status, 401, 'a link works once');
+    assert.equal((await fetchXlsx(link.url.replace(/token=.*/, `token=${ctx.superAdmin.token}`))).status, 401, 'session tokens are not accepted');
+    assert.equal((await fetchXlsx(link.url.replace(/token=.*/, 'token=garbage'))).status, 401);
+
+    // An admin who was granted REPORTS_VIEW gets the business sheets but not the admin accounts.
+    const username = `reports_${rnd()}`;
+    const adm = expectStatus(await call('POST', '/admins', { token: ctx.superAdmin.token, body: { username, name: 'Reports Viewer', password: 'Report@123', role: 'ADMIN', permissions: ['REPORTS_VIEW'] } }), 201).data;
+    const s = await login(username, 'Report@123');
+    const l2 = expectStatus(await call('POST', '/reports/export-link', { token: s.token, body: {} }), 200).data;
+    const wb2 = new ExcelJS.Workbook();
+    await wb2.xlsx.load((await fetchXlsx(l2.url)).buf);
+    const names2 = wb2.worksheets.map((w) => w.name);
+    assert.ok(names2.includes('Orders') && !names2.includes('Admins') && !names2.includes('Admin decisions'));
+
+    // Deactivating the admin invalidates a link that was already issued.
+    const l3 = expectStatus(await call('POST', '/reports/export-link', { token: s.token, body: {} }), 200).data;
+    expectStatus(await call('PATCH', `/admins/${adm._id}/status`, { token: ctx.superAdmin.token, body: { status: 'Deactivated', reason: 'test' } }), 200);
+    assert.equal((await fetchXlsx(l3.url)).status, 401);
+
+    const logs = expectStatus(await call('GET', '/reports/activity?action=REPORT_EXPORTED', { token: ctx.superAdmin.token }), 200);
+    assert.ok(logs.total >= 2, 'exports are audit-logged');
+  });
+
   console.log(`\n${passed} passed, ${failures.length} failed`);
   process.exit(failures.length ? 1 : 0);
 })().catch((err) => {

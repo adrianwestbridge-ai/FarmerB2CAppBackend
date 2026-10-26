@@ -60,6 +60,8 @@ const csvCell = (v) => {
 };
 
 const sendCsv = (res, filename, columns, rows) => {
+  // The Excel export runs the same report handlers and takes the table instead of CSV text.
+  if (typeof res.captureTable === 'function') return res.captureTable({ filename, columns, rows });
   const header = columns.map((c) => csvCell(c.label)).join(',');
   const lines = rows.map((r) => columns.map((c) => csvCell(typeof c.value === 'function' ? c.value(r) : r[c.value])).join(','));
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -303,6 +305,15 @@ const ADMIN_ACTIONS = {
   settlementsDisputed: 'SETTLEMENT_DISPUTED',
 };
 
+const ADMIN_ACTION_LABELS = {
+  approved: 'Orders approved', rejected: 'Orders rejected', cancelled: 'Orders cancelled',
+  verificationCalls: 'Verification calls recorded', assigned: 'Deliveries assigned', reassigned: 'Deliveries reassigned',
+  released: 'Returned to pool', paymentsVerified: 'Payments verified', paymentsRejected: 'Payments rejected',
+  refunds: 'Refunds recorded', offersCreated: 'Offers created', offersUpdated: 'Offers edited',
+  offersActivated: 'Offers activated', offersDeactivated: 'Offers deactivated',
+  settlementsVerified: 'Settlements verified', settlementsDisputed: 'Settlements disputed',
+};
+
 // @route GET /api/reports/admins
 exports.adminActivity = async (req, res) => {
   const match = { actorRole: { $in: ['SUPER_ADMIN', 'ADMIN', 'MODERATOR'] }, action: { $in: Object.values(ADMIN_ACTIONS) } };
@@ -331,7 +342,7 @@ exports.adminActivity = async (req, res) => {
   if (wantsCsv(req)) {
     return sendCsv(res, 'admin-activity.csv', [
       { label: 'Admin', value: 'name' }, { label: 'Username', value: 'username' }, { label: 'Role', value: 'role' }, { label: 'Status', value: 'status' },
-      ...Object.keys(ADMIN_ACTIONS).map((k) => ({ label: k, value: k })),
+      ...Object.keys(ADMIN_ACTIONS).map((k) => ({ label: ADMIN_ACTION_LABELS[k] || k, value: k })),
     ], data);
   }
   res.status(200).json({ success: true, data });
@@ -553,4 +564,210 @@ exports.activity = async (req, res) => {
     ], logs);
   }
   res.status(200).json({ success: true, total, page, pages: Math.ceil(total / limit), data: logs });
+};
+
+// ─── Shared runner (used by the overview and the Excel export) ───────────────
+
+/**
+ * Runs a report handler in-process. asTable=true returns { columns, rows } exactly as the CSV
+ * export would produce them; otherwise returns the JSON `data`.
+ */
+const runReport = (handler, query, asTable = false) => new Promise((resolve, reject) => {
+  const res = {
+    status() { return res; },
+    setHeader() {},
+    send() {},
+    json: (body) => resolve(asTable ? { columns: [], rows: body.data || [] } : body.data),
+    captureTable: (table) => resolve(table),
+  };
+  Promise.resolve(handler({ query: asTable ? { ...query, format: 'csv' } : { ...query } }, res)).catch(reject);
+});
+exports.runReport = runReport;
+
+// ─── Super Admin overview ────────────────────────────────────────────────────
+
+const istYmd = (date) => new Date(date.getTime() + 330 * 60000).toISOString().slice(0, 10);
+
+const periodTotals = async (from) => {
+  const [r] = await Order.aggregate([
+    { $match: from ? { createdAt: { $gte: from } } : {} },
+    {
+      $group: {
+        _id: null,
+        orders: { $sum: 1 },
+        delivered: { $sum: { $cond: [{ $eq: ['$status', 'DELIVERED'] }, 1, 0] } },
+        rejectedOrCancelled: { $sum: { $cond: [{ $in: ['$status', ['REJECTED', 'CANCELLED']] }, 1, 0] } },
+        orderValue: { $sum: { $cond: [{ $in: ['$status', ['REJECTED', 'CANCELLED']] }, 0, '$totalAmount'] } },
+        sales: { $sum: { $cond: [{ $eq: ['$status', 'DELIVERED'] }, '$totalAmount', 0] } },
+        discounts: { $sum: { $cond: [{ $in: ['$status', ['REJECTED', 'CANCELLED']] }, 0, '$discount'] } },
+        collected: {
+          $sum: {
+            $cond: [
+              { $eq: ['$paymentMethod', 'COD'] },
+              '$amountCollected',
+              { $cond: [{ $in: ['$paymentStatus', ['PAID', 'REFUND_PENDING', 'REFUNDED']] }, '$totalAmount', 0] },
+            ],
+          },
+        },
+      },
+    },
+  ]);
+  const t = r || {};
+  const activeOrders = (t.orders || 0) - (t.rejectedOrCancelled || 0);
+  return {
+    orders: t.orders || 0,
+    delivered: t.delivered || 0,
+    rejectedOrCancelled: t.rejectedOrCancelled || 0,
+    orderValue: toMoney(t.orderValue || 0),
+    sales: toMoney(t.sales || 0),
+    discounts: toMoney(t.discounts || 0),
+    collected: toMoney(t.collected || 0),
+    averageOrder: activeOrders > 0 ? toMoney((t.orderValue || 0) / activeOrders) : 0,
+  };
+};
+
+// @route GET /api/reports/overview — the Super Admin's business dashboard
+exports.overview = async (req, res) => {
+  const Farmer = require('../models/Farmer');
+  const Partner = require('../models/Partner');
+  const today = istYmd(new Date());
+  const monthStartYmd = `${today.slice(0, 8)}01`;
+  const todayStart = parseDate(today);
+  const monthStart = parseDate(monthStartYmd);
+
+  const [
+    todayTotals, monthTotals, allTotals,
+    farmersTotal, farmersActive, farmersNew, partnersTotal, partnersActive, partnersOnline, adminsTotal, adminsActive,
+    statusCounts, payCounts, cashWithPartners, settlementCounts,
+    topFarmers, partnerPerf, adminDecisions,
+  ] = await Promise.all([
+    periodTotals(todayStart), periodTotals(monthStart), periodTotals(null),
+    Farmer.countDocuments({}), Farmer.countDocuments({ status: 'Active' }), Farmer.countDocuments({ createdAt: { $gte: monthStart } }),
+    Partner.countDocuments({}), Partner.countDocuments({ status: 'Active' }), Partner.countDocuments({ status: 'Active', online: true }),
+    Admin.countDocuments({ status: { $ne: 'Deleted' } }), Admin.countDocuments({ status: 'Active' }),
+    Order.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]),
+    Order.aggregate([
+      { $match: { paymentStatus: { $in: ['AWAITING_VERIFICATION', 'REFUND_PENDING'] } } },
+      { $group: { _id: '$paymentStatus', count: { $sum: 1 }, amount: { $sum: { $cond: [{ $eq: ['$paymentStatus', 'REFUND_PENDING'] }, '$refundAmount', '$totalAmount'] } } } },
+    ]),
+    Order.aggregate([{ $match: { settlementStatus: 'PENDING', amountCollected: { $gt: 0 } } }, { $group: { _id: null, amount: { $sum: '$amountCollected' } } }]),
+    Settlement.aggregate([{ $match: { status: { $in: ['SUBMITTED', 'DISPUTED'] } } }, { $group: { _id: '$status', count: { $sum: 1 }, amount: { $sum: '$submittedAmount' } } }]),
+    runReport(exports.farmers, { from: monthStartYmd, to: today }),
+    runReport(exports.partners, { from: monthStartYmd, to: today }),
+    runReport(exports.adminActivity, { from: monthStartYmd, to: today }),
+  ]);
+
+  const byStatus = Object.fromEntries(statusCounts.map((r) => [r._id, r.count]));
+  const pay = Object.fromEntries(payCounts.map((r) => [r._id, r]));
+  const stl = Object.fromEntries(settlementCounts.map((r) => [r._id, r]));
+
+  res.status(200).json({
+    success: true,
+    data: {
+      today: todayTotals,
+      month: monthTotals,
+      allTime: allTotals,
+      people: {
+        farmers: { total: farmersTotal, active: farmersActive, newThisMonth: farmersNew },
+        partners: { total: partnersTotal, active: partnersActive, online: partnersOnline },
+        admins: { total: adminsTotal, active: adminsActive },
+      },
+      attention: {
+        pendingApproval: byStatus.PENDING_APPROVAL || 0,
+        awaitingPartner: byStatus.APPROVED || 0,
+        inDelivery: (byStatus.ASSIGNED || 0) + (byStatus.OUT_FOR_DELIVERY || 0),
+        deliveryFailed: byStatus.DELIVERY_FAILED || 0,
+        paymentsToVerify: pay.AWAITING_VERIFICATION ? pay.AWAITING_VERIFICATION.count : 0,
+        refundsPending: pay.REFUND_PENDING ? pay.REFUND_PENDING.count : 0,
+        refundsPendingAmount: toMoney(pay.REFUND_PENDING ? pay.REFUND_PENDING.amount : 0),
+        cashWithPartners: toMoney(cashWithPartners[0] ? cashWithPartners[0].amount : 0),
+        settlementsToVerify: stl.SUBMITTED ? stl.SUBMITTED.count : 0,
+        settlementsToVerifyAmount: toMoney(stl.SUBMITTED ? stl.SUBMITTED.amount : 0),
+        settlementsDisputed: stl.DISPUTED ? stl.DISPUTED.count : 0,
+      },
+      topFarmers: (topFarmers || []).slice(0, 5),
+      partnerPerformance: (partnerPerf || []).sort((a, b) => b.delivered - a.delivered).slice(0, 5),
+      adminDecisions: (adminDecisions || [])
+        .filter((a) => a.status !== 'Deleted')
+        .map((a) => ({
+          adminId: a.adminId, name: a.name, role: a.role,
+          approved: a.approved, rejected: a.rejected, assigned: a.assigned + a.reassigned, paymentsVerified: a.paymentsVerified,
+        }))
+        .sort((a, b) => (b.approved + b.rejected) - (a.approved + a.rejected)),
+    },
+  });
+};
+
+// ─── Excel export ────────────────────────────────────────────────────────────
+
+const EXPORT_TOKEN_MINUTES = 5;
+const usedExportTokens = new Map(); // jti -> expiry (ms); each link downloads once
+
+const EXPORT_FILTER_KEYS = ['from', 'to', 'status', 'paymentMethod', 'paymentStatus', 'settlementStatus', 'farmerId', 'partnerId', 'adminId', 'orderNumber', 'offerId', 'productId'];
+
+// @route POST /api/reports/export-link — short-lived, single-use link the phone opens in its browser
+exports.exportLink = async (req, res) => {
+  const jwt = require('jsonwebtoken');
+  const crypto = require('crypto');
+  const body = req.body || {};
+  const query = {};
+  EXPORT_FILTER_KEYS.forEach((k) => { if (body[k]) query[k] = cleanText(body[k], 60); });
+  dateRange(query); // rejects invalid from / to
+  const token = jwt.sign(
+    {
+      id: String(req.user._id), userType: 'admin', tv: req.user.tokenVersion || 0,
+      purpose: 'excel-export', q: query, jti: crypto.randomBytes(12).toString('hex'),
+    },
+    process.env.JWT_SECRET,
+    { expiresIn: `${EXPORT_TOKEN_MINUTES}m` },
+  );
+  const base = `${req.protocol}://${req.get('host')}`;
+  res.status(200).json({
+    success: true,
+    data: { url: `${base}/api/reports/download?token=${encodeURIComponent(token)}`, expiresInMinutes: EXPORT_TOKEN_MINUTES },
+  });
+};
+
+// @route GET /api/reports/download?token= — streams the .xlsx (opened by the browser, so no Authorization header)
+exports.download = async (req, res) => {
+  const jwt = require('jsonwebtoken');
+  const { resolveUser } = require('../middleware/authMiddleware');
+  const { hasPermission, PERMISSIONS } = require('../utils/permissions');
+  const { audit } = require('../utils/audit');
+  const { buildWorkbook } = require('../services/excelExport');
+
+  const token = String(req.query.token || '');
+  let claims;
+  try {
+    claims = jwt.verify(token, process.env.JWT_SECRET);
+  } catch (e) {
+    throw new AppError(401, 'AUTH_TOKEN_INVALID');
+  }
+  // A normal session token is never accepted here, and each link works once.
+  if (claims.purpose !== 'excel-export' || !claims.jti) throw new AppError(401, 'AUTH_TOKEN_INVALID');
+  const now = Date.now();
+  for (const [k, exp] of usedExportTokens) if (exp < now) usedExportTokens.delete(k);
+  if (usedExportTokens.has(claims.jti)) throw new AppError(401, 'AUTH_TOKEN_INVALID');
+
+  const resolved = await resolveUser(token);
+  if (!resolved || resolved.inactive || resolved.userType !== 'admin') throw new AppError(401, 'AUTH_TOKEN_INVALID');
+  if (!hasPermission(resolved.user, PERMISSIONS.REPORTS_VIEW)) throw new AppError(403, 'AUTH_FORBIDDEN');
+  usedExportTokens.set(claims.jti, claims.exp * 1000);
+
+  req.user = resolved.user;
+  req.userType = 'admin';
+  const query = claims.q || {};
+  const wb = await buildWorkbook({
+    query,
+    includeAdmins: resolved.user.role === 'SUPER_ADMIN',
+    generatedBy: resolved.user.name || resolved.user.username,
+  });
+
+  await audit(req, { action: 'REPORT_EXPORTED', entityType: 'REPORT', entityRef: 'excel', metadata: { query } });
+  const name = `AgriHarvest-report-${query.from || 'all'}-to-${query.to || istYmd(new Date())}.xlsx`;
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+  res.setHeader('Cache-Control', 'no-store');
+  await wb.xlsx.write(res);
+  res.end();
 };

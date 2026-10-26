@@ -119,6 +119,7 @@ module.exports = {
   superAdminOnly,
   requirePermission,
   signToken,
+  resolveUser,
   effectivePermissions,
   MODELS,
 };

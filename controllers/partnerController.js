@@ -1,10 +1,10 @@
 const Partner = require('../models/Partner');
-const Order = require('../models/Order');
 const { AppError, t } = require('../utils/i18n');
 const { audit } = require('../utils/audit');
 const { requireValidId, escapeRegex, cleanText, normalizePhone } = require('../utils/validators');
 const { assertUsername, assertPhone, assertPassword } = require('../utils/identity');
 const { releaseOrdersOfPartner } = require('../services/orderService');
+const { partnerStats, emptyPartnerStats, recentOrdersOfPartner, recentSettlementsOfPartner } = require('../services/userStats');
 
 // @route GET /api/partners?status&online&search  (admin)
 exports.getPartners = async (req, res) => {
@@ -18,17 +18,15 @@ exports.getPartners = async (req, res) => {
   }
   const partners = await Partner.find(filter).sort({ createdAt: -1 });
 
-  // Current workload per partner, to help admins pick who to assign.
-  const loads = await Order.aggregate([
-    { $match: { assignedPartnerId: { $in: partners.map((p) => p._id) }, status: { $in: ['ASSIGNED', 'OUT_FOR_DELIVERY'] } } },
-    { $group: { _id: '$assignedPartnerId', active: { $sum: 1 } } },
-  ]);
-  const loadMap = new Map(loads.map((l) => [String(l._id), l.active]));
-
+  // Current workload (helps admins pick who to assign) and lifetime delivery / cash figures.
+  const stats = await partnerStats(partners.map((p) => p._id));
   res.status(200).json({
     success: true,
     count: partners.length,
-    data: partners.map((p) => ({ ...p.toJSON(), activeDeliveries: loadMap.get(String(p._id)) || 0 })),
+    data: partners.map((p) => {
+      const st = stats.get(String(p._id)) || emptyPartnerStats();
+      return { ...p.toJSON(), activeDeliveries: st.activeDeliveries, stats: st };
+    }),
   });
 };
 
@@ -36,7 +34,15 @@ exports.getPartners = async (req, res) => {
 exports.getPartner = async (req, res) => {
   const partner = await Partner.findById(requireValidId(req.params.id));
   if (!partner) throw new AppError(404, 'USER_NOT_FOUND');
-  res.status(200).json({ success: true, data: partner });
+  const [stats, orders, settlements] = await Promise.all([
+    partnerStats([partner._id]),
+    recentOrdersOfPartner(partner._id),
+    recentSettlementsOfPartner(partner._id),
+  ]);
+  res.status(200).json({
+    success: true,
+    data: { ...partner.toJSON(), stats: stats.get(String(partner._id)) || emptyPartnerStats(), orders, settlements },
+  });
 };
 
 // @route POST /api/partners  (admin)

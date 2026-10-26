@@ -3,6 +3,7 @@ const { AppError, t } = require('../utils/i18n');
 const { audit } = require('../utils/audit');
 const { requireValidId, escapeRegex, cleanText, normalizePhone } = require('../utils/validators');
 const { assertUsername, assertPhone, assertPassword } = require('../utils/identity');
+const { farmerStats, emptyFarmerStats, recentOrdersOfFarmer } = require('../services/userStats');
 
 // @route GET /api/farmers?search&status&page&limit  (admin)
 exports.getFarmers = async (req, res) => {
@@ -18,14 +19,24 @@ exports.getFarmers = async (req, res) => {
     Farmer.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit),
     Farmer.countDocuments(filter),
   ]);
-  res.status(200).json({ success: true, count: farmers.length, total, data: farmers });
+  const stats = await farmerStats(farmers.map((f) => f._id));
+  res.status(200).json({
+    success: true,
+    count: farmers.length,
+    total,
+    data: farmers.map((f) => ({ ...f.toJSON(), stats: stats.get(String(f._id)) || emptyFarmerStats() })),
+  });
 };
 
 // @route GET /api/farmers/:id  (admin)
 exports.getFarmerById = async (req, res) => {
   const farmer = await Farmer.findById(requireValidId(req.params.id));
   if (!farmer) throw new AppError(404, 'USER_NOT_FOUND');
-  res.status(200).json({ success: true, data: farmer });
+  const [stats, orders] = await Promise.all([farmerStats([farmer._id]), recentOrdersOfFarmer(farmer._id)]);
+  res.status(200).json({
+    success: true,
+    data: { ...farmer.toJSON(), stats: stats.get(String(farmer._id)) || emptyFarmerStats(), orders },
+  });
 };
 
 // @route POST /api/farmers  (admin)
