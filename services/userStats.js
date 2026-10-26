@@ -115,7 +115,7 @@ const partnerStats = async (partnerIds) => {
   return map;
 };
 
-const ORDER_SUMMARY_FIELDS = 'orderNumber createdAt status paymentMethod paymentStatus totalAmount mrpTotal subtotal discount farmerName assignedPartnerName deliveredAt amountCollected settlementStatus items.productName items.quantity';
+const ORDER_SUMMARY_FIELDS = 'orderNumber createdAt status paymentMethod paymentStatus totalAmount mrpTotal subtotal discount farmerName assignedPartnerId assignedPartnerName deliveredBy deliveredAt amountCollected settlementStatus items.productName items.quantity';
 
 const recentOrdersOfFarmer = (farmerId, limit = 100) => Order.find({ farmerId: oid(farmerId) })
   .select(ORDER_SUMMARY_FIELDS).sort({ createdAt: -1 }).limit(limit).lean();
