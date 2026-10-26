@@ -885,6 +885,48 @@ async function login(identifier, password) {
     assert.ok(logs.total >= 2, 'exports are audit-logged');
   });
 
+  // ═══ 11. Play Store requirements ════════════════════════════════════════
+  console.log('\n11. Play Store requirements');
+
+  await step('privacy policy and account-deletion pages are public', async () => {
+    const base = API.replace(/\/api\/?$/, '');
+    for (const p of ['/privacy', '/delete-account']) {
+      const res = await fetch(`${base}${p}`);
+      assert.equal(res.status, 200, p);
+      assert.ok((res.headers.get('content-type') || '').includes('text/html'), p);
+      const html = await res.text();
+      assert.ok(html.includes('AgriHarvest') && html.includes('हिंदी'), `${p} has English and Hindi`);
+    }
+  });
+
+  await step('farmer can delete their own account; orders are kept, number is freed', async () => {
+    const p = phone();
+    const u = `del_${rnd()}`;
+    const reg = expectStatus(await call('POST', '/auth/register', { body: { name: 'To Delete', phoneNumber: p, username: u, password: 'Delete@1', confirmPassword: 'Delete@1', addressLine: 'Farm 9' } }), 201);
+    const token = reg.token;
+    const placed = expectStatus(await call('POST', '/orders', { token, body: { items: [{ productId: ctx.npk._id, quantity: 1 }], deliveryAddress: 'Farm 9', paymentMethod: 'COD' } }), 201).data;
+
+    expectStatus(await call('DELETE', '/auth/me', { token: ctx.partnerA.token, body: { password: '123456' } }), 403);
+    let res = await call('DELETE', '/auth/me', { token, body: { password: 'wrong' } });
+    assert.equal(res.status, 401);
+    res = await call('DELETE', '/auth/me', { token, body: { password: 'Delete@1' } });
+    assert.equal(res.body.code, 'ACCOUNT_HAS_OPEN_ORDERS', 'blocked while an order is in progress');
+
+    expectStatus(await call('PATCH', `/orders/${placed._id}/cancel`, { token, body: { reason: 'Changed my mind' } }), 200);
+    expectStatus(await call('DELETE', '/auth/me', { token, body: { password: 'Delete@1' } }), 200);
+
+    expectStatus(await call('GET', '/auth/me', { token }), 401);
+    res = await call('POST', '/auth/login', { body: { identifier: p, password: 'Delete@1' } });
+    assert.ok(res.status === 401 || res.status === 403, 'deleted account cannot log in');
+
+    const order = expectStatus(await call('GET', `/orders/${placed._id}`, { token: ctx.superAdmin.token }), 200).data;
+    assert.equal(order.orderNumber, placed.orderNumber, 'order record kept');
+    const list = expectStatus(await call('GET', `/farmers?search=${u}`, { token: ctx.superAdmin.token }), 200).data;
+    assert.equal(list.length, 0, 'deleted farmer hidden from the directory');
+
+    expectStatus(await call('POST', '/auth/register', { body: { name: 'New Owner', phoneNumber: p, username: `${u}x`, password: 'Fresh@12', confirmPassword: 'Fresh@12' } }), 201);
+  });
+
   console.log(`\n${passed} passed, ${failures.length} failed`);
   process.exit(failures.length ? 1 : 0);
 })().catch((err) => {

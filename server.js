@@ -23,6 +23,7 @@ const settlementRoutes = require("./routes/settlementRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
 const reportRoutes = require("./routes/reportRoutes");
 const passwordResetRoutes = require("./routes/passwordResetRoutes");
+const legalRoutes = require("./routes/legalRoutes");
 
 // App Config
 const app = express();
@@ -53,6 +54,9 @@ app.use(cors({ origin: false, credentials: false }));
 app.get("/api/health", (req, res) => {
   res.status(200).json({ status: "OK", message: "Farmer B2C Backend API Running" });
 });
+
+// Privacy policy and account-deletion pages for the Play Store listing.
+app.use("/", legalRoutes);
 
 app.get("/", (req, res) => {
   res.send("Farmer B2C Backend API Working");

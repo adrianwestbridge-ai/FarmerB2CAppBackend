@@ -5,6 +5,7 @@ const {
   registerFarmer,
   getMe,
   updateMe,
+  deleteMe,
   updatePassword,
   checkUsernameAvailability,
   requestPasswordReset,
@@ -32,6 +33,7 @@ router.get('/check-username', limiter(60, 15), checkUsernameAvailability);
 
 router.get('/me', protect, getMe);
 router.put('/me', protect, updateMe);
+router.delete('/me', protect, limiter(5, 15), deleteMe);
 router.put('/update-password', protect, limiter(10, 15), updatePassword);
 
 module.exports = router;

@@ -16,7 +16,8 @@ const farmerSchema = new mongoose.Schema({
   pincode: { type: String, default: '' },
   profileUrl: { type: String, default: '' },
   coverImageUrl: { type: String, default: '' },
-  status: { type: String, default: 'Active', enum: ['Active', 'Suspended', 'Pending'] },
+  status: { type: String, default: 'Active', enum: ['Active', 'Suspended', 'Pending', 'Deleted'] },
+  deletedAt: { type: Date, default: null },
   createdBy: { type: String, default: null },
 }, {
   timestamps: true,

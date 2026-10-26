@@ -10,7 +10,8 @@ exports.getFarmers = async (req, res) => {
   const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 100));
   const page = Math.max(1, Number(req.query.page) || 1);
   const filter = {};
-  if (req.query.status && ['Active', 'Suspended', 'Pending'].includes(req.query.status)) filter.status = req.query.status;
+  if (req.query.status && ['Active', 'Suspended', 'Pending', 'Deleted'].includes(req.query.status)) filter.status = req.query.status;
+  else filter.status = { $ne: 'Deleted' };
   if (req.query.search) {
     const rx = new RegExp(escapeRegex(cleanText(req.query.search, 60)), 'i');
     filter.$or = [{ name: rx }, { phoneNumber: rx }, { username: rx }, { village: rx }, { district: rx }];

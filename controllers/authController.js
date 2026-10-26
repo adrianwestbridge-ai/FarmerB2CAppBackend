@@ -11,6 +11,7 @@ const { getSettings } = require('../utils/settings');
 const { normalizePhone, isValidPhone, normalizeUsername, isValidUsername, cleanText, cleanImage } = require('../utils/validators');
 const { assertUsername, assertPhone, assertPassword, isUsernameTaken } = require('../utils/identity');
 const { releaseOrdersOfPartner } = require('../services/orderService');
+const CartItem = require('../models/CartItem');
 
 // A real bcrypt hash used to keep the response time of "unknown user" equal to "wrong password".
 const DUMMY_HASH = bcrypt.hashSync('timing-equalizer-not-a-password', 10);
@@ -241,6 +242,38 @@ exports.updatePassword = async (req, res) => {
     message: t(req, 'PASSWORD_UPDATED'),
     token: signToken(req.user, req.userType),
   });
+};
+
+const OPEN_ORDER_STATUSES = ['PENDING_APPROVAL', 'APPROVED', 'ASSIGNED', 'OUT_FOR_DELIVERY', 'DELIVERY_FAILED'];
+
+// @route   DELETE /api/auth/me  (farmer) — deletes the farmer's own account (Play Store requirement).
+// Personal details are erased and the phone number / username are freed for a new registration.
+// Orders stay as business and tax records, with the name and phone recorded at order time.
+exports.deleteMe = async (req, res) => {
+  if (req.userType !== 'farmer') throw new AppError(403, 'ACCOUNT_DELETE_STAFF');
+  const { password } = req.body || {};
+  if (!password || !(await req.user.matchPassword(password))) throw new AppError(401, 'PASSWORD_OLD_INCORRECT');
+  const open = await Order.countDocuments({ farmerId: req.user._id, status: { $in: OPEN_ORDER_STATUSES } });
+  if (open > 0) throw new AppError(409, 'ACCOUNT_HAS_OPEN_ORDERS', { count: open });
+
+  const farmer = req.user;
+  const ownerId = farmer.owner_id;
+  const id = String(farmer._id);
+  farmer.status = 'Deleted';
+  farmer.deletedAt = new Date();
+  farmer.name = 'Deleted farmer';
+  farmer.phoneNumber = `deleted_${id}`;
+  farmer.username = undefined;
+  ['addressLine', 'village', 'district', 'state', 'pincode', 'cropType', 'profileUrl', 'coverImageUrl'].forEach((k) => { farmer[k] = ''; });
+  farmer.landSizeAcres = 0;
+  farmer.password = undefined;
+  farmer.tokenVersion = (farmer.tokenVersion || 0) + 1; // signs out every session
+  await farmer.save({ validateBeforeSave: false });
+  if (ownerId) await CartItem.deleteMany({ owner_id: ownerId });
+  await PasswordResetRequest.deleteMany({ userId: id }).catch(() => {});
+
+  await audit(req, { action: 'ACCOUNT_DELETED', entityType: 'FARMER', entityId: farmer._id, reason: 'Deleted by the farmer' });
+  res.status(200).json({ success: true, message: t(req, 'ACCOUNT_DELETED') });
 };
 
 // @route   GET /api/auth/check-username?username=xyz
