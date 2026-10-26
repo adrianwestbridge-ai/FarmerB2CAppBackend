@@ -8,7 +8,7 @@ const { signToken, effectivePermissions } = require('../middleware/authMiddlewar
 const { t, AppError } = require('../utils/i18n');
 const { audit } = require('../utils/audit');
 const { getSettings } = require('../utils/settings');
-const { normalizePhone, isValidPhone, normalizeUsername, isValidUsername, cleanText } = require('../utils/validators');
+const { normalizePhone, isValidPhone, normalizeUsername, isValidUsername, cleanText, cleanImage } = require('../utils/validators');
 const { assertUsername, assertPhone, assertPassword, isUsernameTaken } = require('../utils/identity');
 const { releaseOrdersOfPartner } = require('../services/orderService');
 
@@ -184,8 +184,9 @@ exports.updateMe = async (req, res) => {
     if (!name) throw new AppError(400, 'NAME_REQUIRED');
     user.name = name;
   }
-  if (body.profileUrl !== undefined) set('profileUrl', cleanText(body.profileUrl, 1000));
-  if (body.coverImageUrl !== undefined) set('coverImageUrl', cleanText(body.coverImageUrl, 1000));
+  // Photos come from the phone camera / gallery as compressed data URIs (or a public URL).
+  if (body.profileUrl !== undefined) set('profileUrl', cleanImage(body.profileUrl));
+  if (body.coverImageUrl !== undefined) set('coverImageUrl', cleanImage(body.coverImageUrl));
   if (body.appLanguage !== undefined) set('appLanguage', body.appLanguage === 'hi' ? 'hi' : 'en');
 
   if (req.userType === 'farmer') {
