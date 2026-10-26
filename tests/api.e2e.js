@@ -15,6 +15,8 @@ const API = process.env.API_URL || 'http://localhost:4000/api';
 const rnd = () => Math.floor(Math.random() * 1e6);
 const phone = () => `9${String(Math.floor(100000000 + Math.random() * 899999999))}`;
 const money = (n) => Math.round(n * 100) / 100;
+// Real UPI transaction references are 12 digits.
+const utr12 = () => `${Date.now()}${Math.floor(Math.random() * 10)}`.slice(-12);
 
 let passed = 0;
 const failures = [];
@@ -502,7 +504,9 @@ async function login(identifier, password) {
     assert.equal(res.body.code, 'PAYMENT_REFERENCE_REQUIRED');
     res = await call('POST', '/orders', { token: ctx.farmer.token, body: { items: [{ productId: ctx.npk._id, quantity: 1 }], deliveryAddress: 'Farm', paymentMethod: 'ONLINE', paymentReference: '12' } });
     assert.equal(res.body.code, 'PAYMENT_REFERENCE_INVALID');
-    ctx.utr = `UTR${rnd()}${rnd()}`;
+    res = await call('POST', '/orders', { token: ctx.farmer.token, body: { items: [{ productId: ctx.npk._id, quantity: 1 }], deliveryAddress: 'Farm', paymentMethod: 'ONLINE', paymentReference: 'TXN12345ABCDE' } });
+    assert.equal(res.body.code, 'PAYMENT_REFERENCE_INVALID', 'only 12-digit UTRs are accepted');
+    ctx.utr = utr12();
     const o = expectStatus(await call('POST', '/orders', { token: ctx.farmer.token, body: { items: [{ productId: ctx.npk._id, quantity: 1 }], deliveryAddress: 'Farm', paymentMethod: 'ONLINE', paymentReference: ctx.utr } }), 201).data;
     assert.equal(o.paymentStatus, 'AWAITING_VERIFICATION');
     assert.equal(o.expectedCollection, 0);
@@ -516,7 +520,7 @@ async function login(identifier, password) {
     expectStatus(await call('PATCH', `/orders/${id}/payment/verify`, { token: ctx.moderator.token, body: { approved: true } }), 403);
     let o = expectStatus(await call('PATCH', `/orders/${id}/payment/verify`, { token: ctx.opsAdmin.token, body: { approved: false, reason: 'UTR not found in bank statement' } }), 200).data;
     assert.equal(o.paymentStatus, 'FAILED');
-    const newUtr = `UTR${rnd()}${rnd()}`;
+    const newUtr = utr12();
     o = expectStatus(await call('PATCH', `/orders/${id}/payment-reference`, { token: ctx.farmer.token, body: { paymentReference: newUtr } }), 200).data;
     assert.equal(o.paymentStatus, 'AWAITING_VERIFICATION');
     o = expectStatus(await call('PATCH', `/orders/${id}/payment/verify`, { token: ctx.opsAdmin.token, body: { approved: true } }), 200).data;
@@ -538,7 +542,7 @@ async function login(identifier, password) {
   });
 
   await step('paid online order cancelled by admin → refund pending → refunded', async () => {
-    const utr = `UTR${rnd()}${rnd()}`;
+    const utr = utr12();
     const o = expectStatus(await call('POST', '/orders', { token: ctx.farmer.token, body: { items: [{ productId: ctx.npk._id, quantity: 1 }], deliveryAddress: 'Farm', paymentMethod: 'ONLINE', paymentReference: utr } }), 201).data;
     expectStatus(await call('PATCH', `/orders/${o._id}/payment/verify`, { token: ctx.opsAdmin.token, body: { approved: true } }), 200);
     let c = expectStatus(await call('PATCH', `/orders/${o._id}/cancel`, { token: ctx.opsAdmin.token, body: { reason: 'Product damaged in warehouse' } }), 200).data;
@@ -750,6 +754,22 @@ async function login(identifier, password) {
     q = expectStatus(await call('POST', '/orders/quote', { token: ctx.farmer.token, body: { items: [{ productId: ctx.basmati._id, quantity: 2 }] } }), 200).data;
     assert.equal(q.deliveryCharge, 0);
     expectStatus(await call('PUT', '/settings', { token: t, body: { deliveryFee: 50, freeDeliveryAbove: 0 } }), 200);
+  });
+
+  await step('UPI ID must be a real UPI ID; online payments need one', async () => {
+    const t = ctx.superAdmin.token;
+    for (const bad of ['abc', 'name@', '@ybl', 'my name@ybl', 'name@ybl.com']) {
+      const res = await call('PUT', '/settings', { token: t, body: { upiId: bad } });
+      assert.equal(res.body.code, 'UPI_ID_INVALID', bad);
+    }
+    let res = await call('PUT', '/settings', { token: t, body: { upiId: '', onlineEnabled: true } });
+    assert.equal(res.body.code, 'UPI_ID_REQUIRED');
+    for (const good of ['9876543210@ybl', 'KamAgro@OKHDFCBANK', 'farm.store-1@paytm']) {
+      const d = expectStatus(await call('PUT', '/settings', { token: t, body: { upiId: good } }), 200).data;
+      assert.equal(d.upiId, good.toLowerCase());
+    }
+    const pub = expectStatus(await call('GET', '/settings/public'), 200).data;
+    assert.equal(pub.upiId, 'farm.store-1@paytm');
   });
 
   await step('login method setting is enforced', async () => {

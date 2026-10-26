@@ -121,7 +121,8 @@ const clearAssignment = (order) => {
 
 // ─── Farmer: place order ─────────────────────────────────────────────────────
 
-const PAYMENT_REF_RE = /^[A-Za-z0-9-]{6,40}$/;
+// UPI transaction reference (UTR / RRN) is always 12 digits.
+const PAYMENT_REF_RE = /^\d{12}$/;
 
 const normalizeReference = (value) => cleanText(value, 60).replace(/\s+/g, '').toUpperCase();
 

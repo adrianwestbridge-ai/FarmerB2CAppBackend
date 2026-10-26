@@ -53,7 +53,13 @@ const parseDate = (value, endOfDay = false) => {
   return Number.isNaN(d.getTime()) ? null : d;
 };
 
+// UPI virtual payment address: handle@psp, e.g. 9876543210@ybl, kamagro@okhdfcbank, name@paytm.
+const UPI_ID_RE = /^[a-z0-9][a-z0-9._-]{1,255}@[a-z][a-z0-9]{1,63}$/;
+const normalizeUpiId = (value) => String(value || '').trim().toLowerCase();
+
 module.exports = {
+  UPI_ID_RE,
+  normalizeUpiId,
   normalizePhone,
   isValidPhone,
   normalizeUsername,

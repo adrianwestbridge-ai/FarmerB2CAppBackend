@@ -1,7 +1,7 @@
 const { AppError } = require('../utils/i18n');
 const { audit } = require('../utils/audit');
 const { getSettings, publicSettings } = require('../utils/settings');
-const { cleanText, toMoney } = require('../utils/validators');
+const { cleanText, toMoney, UPI_ID_RE, normalizeUpiId } = require('../utils/validators');
 
 // @route GET /api/settings/public — values the app needs before / after login
 exports.getPublicSettings = async (req, res) => {
@@ -39,7 +39,12 @@ exports.updateSettings = async (req, res) => {
     if (body[k] !== undefined) settings[k] = body[k] === true || body[k] === 'true';
   });
   if (!settings.codEnabled && !settings.onlineEnabled) throw new AppError(400, 'SETTINGS_INVALID');
-  if (body.upiId !== undefined) settings.upiId = cleanText(body.upiId, 100);
+  if (body.upiId !== undefined) {
+    const upi = normalizeUpiId(body.upiId);
+    if (upi && !UPI_ID_RE.test(upi)) throw new AppError(400, 'UPI_ID_INVALID');
+    settings.upiId = upi;
+  }
+  if (settings.onlineEnabled && !settings.upiId) throw new AppError(400, 'UPI_ID_REQUIRED');
   if (body.upiPayeeName !== undefined) settings.upiPayeeName = cleanText(body.upiPayeeName, 100);
   if (body.paymentInstructions !== undefined) settings.paymentInstructions = cleanText(body.paymentInstructions, 1000);
   if (body.paymentInstructionsHi !== undefined) settings.paymentInstructionsHi = cleanText(body.paymentInstructionsHi, 1000);
