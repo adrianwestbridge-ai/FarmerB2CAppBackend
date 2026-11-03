@@ -11,13 +11,20 @@ const MODELS = { farmer: Farmer, partner: Partner, admin: Admin };
 // Admins: Active | Deactivated | Deleted. Farmers / partners: Active | Suspended | Pending.
 const isAccountActive = (user) => user.status === 'Active';
 
+// Farmers and partners stay signed in on their phone until they log out, so their token is long-lived
+// and renewed by GET /auth/me (sliding). Admin sessions live only in app memory and use the shorter one.
+// Revocation (password change, suspension, deletion) still works at any time through tokenVersion.
+const tokenLifetime = (userType) => (userType === 'admin'
+  ? process.env.JWT_EXPIRES_IN || '7d'
+  : process.env.JWT_USER_EXPIRES_IN || '90d');
+
 const signToken = (user, userType) => {
   const secret = process.env.JWT_SECRET;
   if (!secret) throw new Error('JWT_SECRET is not set');
   return jwt.sign(
     { id: String(user._id), userType, tv: user.tokenVersion || 0 },
     secret,
-    { expiresIn: process.env.JWT_EXPIRES_IN || '7d' },
+    { expiresIn: tokenLifetime(userType) },
   );
 };
 

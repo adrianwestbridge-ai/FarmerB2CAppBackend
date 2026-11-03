@@ -102,6 +102,23 @@ async function login(identifier, password) {
     assert.equal(ctx.partnerA.userType, 'partner');
   });
 
+  await step('farmer / partner sessions are long-lived and renewed by /auth/me; admin sessions are not', async () => {
+    const days = (token) => {
+      const { iat, exp } = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString());
+      return (exp - iat) / 86400;
+    };
+    assert.ok(days(ctx.farmer.token) >= 90, 'farmer token lasts 90 days');
+    assert.ok(days(ctx.partnerA.token) >= 90, 'partner token lasts 90 days');
+    assert.ok(days(ctx.superAdmin.token) <= 7, 'admin token stays short');
+    for (const s of [ctx.farmer, ctx.partnerA]) {
+      const me = expectStatus(await call('GET', '/auth/me', { token: s.token }), 200);
+      assert.ok(me.token, `${s.userType} gets a renewed token`);
+      expectStatus(await call('GET', '/auth/me', { token: me.token }), 200);
+    }
+    const adminMe = expectStatus(await call('GET', '/auth/me', { token: ctx.superAdmin.token }), 200);
+    assert.equal(adminMe.token, undefined, 'admin session is not renewed');
+  });
+
   await step('farmer self-registration validates and requires a password', async () => {
     const p = phone();
     const u = `farmer_${rnd()}`;

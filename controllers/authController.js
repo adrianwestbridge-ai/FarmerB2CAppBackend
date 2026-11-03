@@ -165,9 +165,11 @@ exports.registerFarmer = async (req, res) => {
 };
 
 // @route   GET /api/auth/me
+// Farmers and partners also get a renewed token, so a saved session never expires while the app is used.
 exports.getMe = async (req, res) => {
   res.status(200).json({
     success: true,
+    ...(req.userType !== 'admin' && { token: signToken(req.user, req.userType) }),
     userType: req.userType,
     data: req.user.toJSON(),
     permissions: req.userType === 'admin' ? effectivePermissions(req.user) : [],
