@@ -1,7 +1,7 @@
 const Farmer = require('../models/Farmer');
 const { AppError, t } = require('../utils/i18n');
 const { audit } = require('../utils/audit');
-const { requireValidId, escapeRegex, cleanText, normalizePhone } = require('../utils/validators');
+const { requireValidId, escapeRegex, cleanText, cleanImage, normalizePhone } = require('../utils/validators');
 const { assertUsername, assertPhone, assertPassword } = require('../utils/identity');
 const { farmerStats, emptyFarmerStats, recentOrdersOfFarmer } = require('../services/userStats');
 
@@ -60,6 +60,7 @@ exports.createFarmer = async (req, res) => {
     district: cleanText(body.district, 100),
     state: cleanText(body.state, 100),
     pincode: cleanText(body.pincode, 10),
+    profileUrl: cleanImage(body.profileUrl),
     createdBy: String(req.user._id),
   });
   await audit(req, { action: 'FARMER_CREATED', entityType: 'FARMER', entityId: farmer._id, entityRef: username, toStatus: 'Active' });
@@ -82,6 +83,7 @@ exports.updateFarmer = async (req, res) => {
   ['addressLine', 'village', 'district', 'state', 'pincode', 'cropType', 'language'].forEach((f) => {
     if (body[f] !== undefined) farmer[f] = cleanText(body[f], f === 'addressLine' ? 300 : 100);
   });
+  if (body.profileUrl !== undefined) farmer.profileUrl = cleanImage(body.profileUrl);
   await farmer.save();
   await audit(req, { action: 'FARMER_UPDATED', entityType: 'FARMER', entityId: farmer._id, entityRef: farmer.username || farmer.phoneNumber });
   res.status(200).json({ success: true, data: farmer });

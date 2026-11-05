@@ -18,6 +18,10 @@ const settingSchema = new mongoose.Schema({
   upiPayeeName: { type: String, default: '' },
   paymentInstructions: { type: String, default: '' },
   paymentInstructionsHi: { type: String, default: '' },
+  // Payment QR uploaded by the Super Admin; farmers scan it to pay online (compressed data URI or URL).
+  upiQrImage: { type: String, default: '' },
+  // Customer helpline shown in the side menu and under the payment QR.
+  helplineNumber: { type: String, default: '18001234567' },
 
   // Delivery partner earnings (kept separate from customer cash collections). 0 = not used.
   partnerEarningPerDelivery: { type: Number, default: 0, min: 0 },

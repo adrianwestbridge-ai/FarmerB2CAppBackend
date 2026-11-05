@@ -147,7 +147,7 @@ const placeOrder = async (req, body) => {
   const paymentMethod = String(body.paymentMethod || '').toUpperCase();
   if (!['COD', 'ONLINE'].includes(paymentMethod)) throw new AppError(400, 'PAYMENT_METHOD_INVALID');
   const settings = await getSettings();
-  if ((paymentMethod === 'COD' && !settings.codEnabled) || (paymentMethod === 'ONLINE' && !settings.onlineEnabled)) {
+  if ((paymentMethod === 'COD' && !settings.codEnabled) || (paymentMethod === 'ONLINE' && (!settings.onlineEnabled || !settings.upiQrImage))) {
     throw new AppError(400, 'PAYMENT_METHOD_DISABLED');
   }
 

@@ -3,7 +3,7 @@ const AuditLog = require('../models/AuditLog');
 const { AppError, t } = require('../utils/i18n');
 const { audit } = require('../utils/audit');
 const { ALL_PERMISSIONS, DEFAULT_PERMISSIONS, PERMISSIONS, effectivePermissions } = require('../utils/permissions');
-const { requireValidId, cleanText, normalizePhone, isValidPhone, parseDate } = require('../utils/validators');
+const { requireValidId, cleanText, cleanImage, normalizePhone, isValidPhone, parseDate } = require('../utils/validators');
 const { assertUsername, assertPassword } = require('../utils/identity');
 
 const serialize = (admin) => ({ ...admin.toJSON(), effectivePermissions: effectivePermissions(admin) });
@@ -70,6 +70,7 @@ exports.createAdmin = async (req, res) => {
     permissions,
     phoneNumber: phone,
     email: cleanText(body.email, 200),
+    profileUrl: cleanImage(body.profileUrl),
     status: 'Active',
     createdBy: String(req.user._id),
   });
@@ -95,6 +96,7 @@ exports.updateAdmin = async (req, res) => {
     admin.phoneNumber = phone;
   }
   if (body.email !== undefined) admin.email = cleanText(body.email, 200);
+  if (body.profileUrl !== undefined) admin.profileUrl = cleanImage(body.profileUrl);
   if (body.role !== undefined) admin.role = parseRole(body.role);
   if (body.permissions !== undefined) admin.permissions = parsePermissions(body.permissions, admin.role);
 

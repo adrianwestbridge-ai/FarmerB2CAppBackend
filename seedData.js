@@ -947,8 +947,11 @@ const seedData = async () => {
       freeDeliveryAbove: 0,
       upiId: 'agriharvest@upi',
       upiPayeeName: 'AgriHarvest Agro Pvt Ltd',
-      paymentInstructions: 'Pay the exact total to the UPI ID above, then enter the UPI transaction reference (UTR) number.',
-      paymentInstructionsHi: 'ऊपर दी गई UPI ID पर पूरी राशि का भुगतान करें, फिर UPI लेनदेन संदर्भ (UTR) संख्या दर्ज करें।',
+      // Demo QR for the demo UPI ID above; the Super Admin uploads the real one in Business settings.
+      upiQrImage: `data:image/png;base64,${require('fs').readFileSync(require('path').join(__dirname, 'seed-assets', 'demo-upi-qr.png')).toString('base64')}`,
+      helplineNumber: '18001234567',
+      paymentInstructions: 'Pay the exact total by scanning the QR, then enter the 12-digit UPI transaction reference (UTR).',
+      paymentInstructionsHi: 'QR स्कैन करके पूरी राशि का भुगतान करें, फिर 12 अंकों का UPI लेनदेन संदर्भ (UTR) दर्ज करें।',
     });
 
     const day = 24 * 3600 * 1000;

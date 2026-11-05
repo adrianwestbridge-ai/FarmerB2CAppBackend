@@ -23,6 +23,8 @@ const publicSettings = (s) => ({
   upiPayeeName: s.upiPayeeName,
   paymentInstructions: s.paymentInstructions,
   paymentInstructionsHi: s.paymentInstructionsHi,
+  upiQrImage: s.upiQrImage || '',
+  helplineNumber: s.helplineNumber || '',
   partnerEarningPerDelivery: s.partnerEarningPerDelivery,
 });
 

@@ -1,7 +1,7 @@
 const Partner = require('../models/Partner');
 const { AppError, t } = require('../utils/i18n');
 const { audit } = require('../utils/audit');
-const { requireValidId, escapeRegex, cleanText, normalizePhone } = require('../utils/validators');
+const { requireValidId, escapeRegex, cleanText, cleanImage, normalizePhone } = require('../utils/validators');
 const { assertUsername, assertPhone, assertPassword } = require('../utils/identity');
 const { releaseOrdersOfPartner } = require('../services/orderService');
 const { partnerStats, emptyPartnerStats, recentOrdersOfPartner, recentSettlementsOfPartner } = require('../services/userStats');
@@ -66,6 +66,7 @@ exports.createPartner = async (req, res) => {
     addressLine: cleanText(body.addressLine, 300),
     vehicleName: cleanText(body.vehicleName, 80),
     vehicleNumber: cleanText(body.vehicleNumber, 20),
+    profileUrl: cleanImage(body.profileUrl),
     createdBy: String(req.user._id),
   });
   await audit(req, { action: 'PARTNER_CREATED', entityType: 'PARTNER', entityId: partner._id, entityRef: phoneNumber, toStatus: 'Active' });
@@ -88,6 +89,7 @@ exports.updatePartner = async (req, res) => {
   ['businessName', 'gstNumber', 'serviceArea', 'addressLine', 'vehicleName', 'vehicleNumber'].forEach((f) => {
     if (body[f] !== undefined) partner[f] = cleanText(body[f], 200);
   });
+  if (body.profileUrl !== undefined) partner.profileUrl = cleanImage(body.profileUrl);
   await partner.save();
   await audit(req, { action: 'PARTNER_UPDATED', entityType: 'PARTNER', entityId: partner._id, entityRef: partner.phoneNumber });
   res.status(200).json({ success: true, data: partner });

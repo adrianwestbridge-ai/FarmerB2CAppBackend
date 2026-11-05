@@ -773,20 +773,54 @@ async function login(identifier, password) {
     expectStatus(await call('PUT', '/settings', { token: t, body: { deliveryFee: 50, freeDeliveryAbove: 0 } }), 200);
   });
 
-  await step('UPI ID must be a real UPI ID; online payments need one', async () => {
+  await step('UPI ID, when given, must be a real UPI ID', async () => {
     const t = ctx.superAdmin.token;
     for (const bad of ['abc', 'name@', '@ybl', 'my name@ybl', 'name@ybl.com']) {
       const res = await call('PUT', '/settings', { token: t, body: { upiId: bad } });
       assert.equal(res.body.code, 'UPI_ID_INVALID', bad);
     }
-    let res = await call('PUT', '/settings', { token: t, body: { upiId: '', onlineEnabled: true } });
-    assert.equal(res.body.code, 'UPI_ID_REQUIRED');
+    // Online payments are made by scanning the uploaded QR, so the UPI ID itself is optional.
+    expectStatus(await call('PUT', '/settings', { token: t, body: { upiId: '', onlineEnabled: true } }), 200);
     for (const good of ['9876543210@ybl', 'KamAgro@OKHDFCBANK', 'farm.store-1@paytm']) {
       const d = expectStatus(await call('PUT', '/settings', { token: t, body: { upiId: good } }), 200).data;
       assert.equal(d.upiId, good.toLowerCase());
     }
     const pub = expectStatus(await call('GET', '/settings/public'), 200).data;
     assert.equal(pub.upiId, 'farm.store-1@paytm');
+  });
+
+  await step('payment QR and helpline: Super Admin uploads, farmers see them', async () => {
+    const t = ctx.superAdmin.token;
+    const qr = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    let res = await call('PUT', '/settings', { token: t, body: { upiQrImage: 'file:///sdcard/qr.png' } });
+    assert.equal(res.body.code, 'UPI_QR_INVALID');
+    res = await call('PUT', '/settings', { token: t, body: { upiQrImage: '', onlineEnabled: true } });
+    assert.equal(res.body.code, 'UPI_QR_REQUIRED');
+    res = await call('PUT', '/settings', { token: t, body: { helplineNumber: '12' } });
+    assert.equal(res.body.code, 'HELPLINE_INVALID');
+    expectStatus(await call('PUT', '/settings', { token: t, body: { upiQrImage: qr, helplineNumber: '1800 222 333' } }), 200);
+    const pub = expectStatus(await call('GET', '/settings/public'), 200).data;
+    assert.equal(pub.upiQrImage, qr);
+    assert.equal(pub.helplineNumber, '1800222333');
+    res = await call('PUT', '/settings', { token: ctx.opsAdmin.token, body: { upiQrImage: '' } });
+    assert.ok(res.status === 401 || res.status === 403, 'only the Super Admin changes the QR');
+    // Turning online off lets the QR be removed; turn it back on with a QR.
+    expectStatus(await call('PUT', '/settings', { token: t, body: { onlineEnabled: false, upiQrImage: '' } }), 200);
+    expectStatus(await call('PUT', '/settings', { token: t, body: { onlineEnabled: true, upiQrImage: qr } }), 200);
+  });
+
+  await step('profile photo can be set when creating an account', async () => {
+    const t = ctx.superAdmin.token;
+    const photo = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAAA//EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AN//Z';
+    const stamp = String(Date.now()).slice(-6);
+    const reg = expectStatus(await call('POST', '/auth/register', { body: { phoneNumber: `76${stamp}01`, username: `photo_f${stamp}`, name: 'Photo Farmer', password: 'abc123', confirmPassword: 'abc123', profileUrl: photo } }), 201);
+    assert.equal(reg.data.profileUrl, photo);
+    const p = expectStatus(await call('POST', '/partners', { token: t, body: { phoneNumber: `76${stamp}02`, name: 'Photo Partner', password: 'abc123', confirmPassword: 'abc123', profileUrl: photo } }), 201);
+    assert.equal(p.data.profileUrl, photo);
+    const a = expectStatus(await call('POST', '/admins', { token: t, body: { username: `photo_a${stamp}`, name: 'Photo Admin', password: 'Abc@1234', confirmPassword: 'Abc@1234', role: 'ADMIN', profileUrl: photo } }), 201);
+    assert.equal(a.data.profileUrl, photo);
+    const bad = expectStatus(await call('POST', '/farmers', { token: t, body: { phoneNumber: `76${stamp}03`, username: `photo_g${stamp}`, name: 'Bad Photo', password: 'abc123', confirmPassword: 'abc123', profileUrl: 'content://media/1' } }), 201);
+    assert.equal(bad.data.profileUrl, '', 'phone-local paths are never stored');
   });
 
   await step('login method setting is enforced', async () => {

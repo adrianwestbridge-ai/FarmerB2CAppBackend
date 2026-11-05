@@ -156,6 +156,7 @@ exports.registerFarmer = async (req, res) => {
     state: cleanText(body.state, 100),
     pincode: cleanText(body.pincode, 10),
     appLanguage: body.appLanguage === 'hi' ? 'hi' : 'en',
+    profileUrl: cleanImage(body.profileUrl),
   });
 
   await audit(req, { actor: farmer, actorRole: 'FARMER', action: 'ACCOUNT_REGISTERED', entityType: 'FARMER', entityId: farmer._id, entityRef: username });

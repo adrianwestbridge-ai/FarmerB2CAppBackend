@@ -155,7 +155,7 @@ async function run() {
     if (!DRY) {
       await db.collection('settings').insertOne({
         key: 'global', loginMethod: 'USERNAME_OR_MOBILE', deliveryFee: 50, freeDeliveryAbove: 0,
-        codEnabled: true, onlineEnabled: true, upiId: '', upiPayeeName: '', paymentInstructions: '', paymentInstructionsHi: '',
+        codEnabled: true, onlineEnabled: false, upiId: '', upiPayeeName: '', paymentInstructions: '', paymentInstructionsHi: '', upiQrImage: '', helplineNumber: '18001234567',
         partnerEarningPerDelivery: 0, createdAt: new Date(), updatedAt: new Date(),
       });
     }
