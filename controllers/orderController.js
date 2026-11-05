@@ -4,6 +4,7 @@ const { hasPermission, PERMISSIONS } = require('../utils/permissions');
 const { requireValidId, escapeRegex, parseDate, cleanText } = require('../utils/validators');
 const { priceCart } = require('../services/pricingService');
 const svc = require('../services/orderService');
+const { paymentSummary } = require('../services/paymentService');
 
 // ─── Role-aware serialization ────────────────────────────────────────────────
 
@@ -16,6 +17,14 @@ const serializeOrder = (order, userType) => {
   const o = typeof order.toObject === 'function' ? order.toObject() : { ...order };
   delete o.idempotencyKey;
   delete o.__v;
+  // Same money position for every role: paid online, waiting for confirmation, cash, balance due.
+  Object.assign(o, paymentSummary(o));
+  if (userType === 'farmer' || userType === 'partner') {
+    o.payments = (o.payments || []).map((p) => ({
+      _id: p._id, amount: p.amount, confirmedAmount: p.confirmedAmount, reference: p.reference, source: p.source,
+      status: p.status, submittedAt: p.submittedAt, reviewedAt: p.reviewedAt, rejectReason: p.rejectReason,
+    }));
+  }
   if (userType === 'farmer') {
     delete o.verificationCalls;
     delete o.assignmentHistory;
@@ -221,6 +230,16 @@ exports.assignPartner = respond(svc.adminAssign);
 exports.releaseOrder = respond(svc.adminRelease);
 exports.verifyPayment = respond(svc.verifyPayment);
 exports.recordRefund = respond(svc.recordRefund);
+const respondEntry = (fn) => async (req, res) => {
+  const order = await fn(req, req.params.id, req.params.entryId, req.body || {});
+  res.status(200).json({ success: true, data: serializeOrder(order, req.userType) });
+};
+exports.reviewPaymentEntry = respondEntry(svc.reviewPaymentEntry);
+exports.editPaymentEntry = respondEntry(svc.editPaymentEntry);
+exports.addManualPayment = async (req, res) => {
+  const order = await svc.addManualPayment(req, req.params.id, req.body || {});
+  res.status(201).json({ success: true, data: serializeOrder(order, req.userType) });
+};
 
 // ─── Delivery partner ────────────────────────────────────────────────────────
 

@@ -12,7 +12,9 @@ const ORDER_STATUSES = [
 ];
 
 // CANCELLED = nothing is owed any more (order rejected / cancelled before any payment was made).
-const PAYMENT_STATUSES = ['PENDING', 'AWAITING_VERIFICATION', 'PAID', 'FAILED', 'REFUND_PENDING', 'REFUNDED', 'CANCELLED'];
+// PARTIALLY_PAID = part of the total has been received (QR payments and/or cash); the rest is still due.
+const PAYMENT_STATUSES = ['PENDING', 'AWAITING_VERIFICATION', 'PARTIALLY_PAID', 'PAID', 'FAILED', 'REFUND_PENDING', 'REFUNDED', 'CANCELLED'];
+const PAYMENT_ENTRY_STATUSES = ['PENDING', 'CONFIRMED', 'REJECTED'];
 const COLLECTION_STATUSES = ['NOT_APPLICABLE', 'PENDING', 'COLLECTED', 'DISPUTED'];
 const SETTLEMENT_STATUSES = ['NOT_APPLICABLE', 'PENDING', 'SUBMITTED', 'VERIFIED', 'DISPUTED'];
 const VERIFICATION_OUTCOMES = ['CONFIRMED', 'DENIED', 'NOT_REACHABLE', 'DETAILS_INCORRECT'];
@@ -66,6 +68,39 @@ const assignmentEventSchema = new mongoose.Schema({
   byRole: { type: String, default: '' },
   byName: { type: String, default: '' },
 }, { _id: false });
+
+// Every QR / UPI payment the farmer reports, and every manual entry by the Super Admin.
+// The Accounts team confirms (with the amount that actually arrived) or rejects each one.
+const paymentEditSchema = new mongoose.Schema({
+  at: { type: Date, default: Date.now },
+  byId: { type: String, default: null },
+  byRole: { type: String, default: '' },
+  byName: { type: String, default: '' },
+  fromAmount: { type: Number, default: 0 },
+  toAmount: { type: Number, default: 0 },
+  fromStatus: { type: String, default: '' },
+  toStatus: { type: String, default: '' },
+  reason: { type: String, default: '' },
+}, { _id: false });
+
+const paymentEntrySchema = new mongoose.Schema({
+  amount: { type: Number, required: true, min: 0 },          // amount the farmer says they paid
+  confirmedAmount: { type: Number, default: 0, min: 0 },     // amount the Accounts team confirmed as received
+  reference: { type: String, default: '', trim: true },      // UPI transaction reference (UTR)
+  source: { type: String, enum: ['FARMER_QR', 'MANUAL'], default: 'FARMER_QR' },
+  status: { type: String, enum: PAYMENT_ENTRY_STATUSES, default: 'PENDING' },
+  note: { type: String, default: '' },
+  submittedAt: { type: Date, default: Date.now },
+  submittedById: { type: String, default: null },
+  submittedByRole: { type: String, default: '' },
+  submittedByName: { type: String, default: '' },
+  reviewedAt: { type: Date, default: null },
+  reviewedById: { type: String, default: null },
+  reviewedByRole: { type: String, default: '' },
+  reviewedByName: { type: String, default: '' },
+  rejectReason: { type: String, default: '' },
+  edits: { type: [paymentEditSchema], default: [] },
+}, { timestamps: false });
 
 const orderSchema = new mongoose.Schema({
   orderNumber: { type: String, required: true, unique: true, index: true },
@@ -138,6 +173,11 @@ const orderSchema = new mongoose.Schema({
   refundedBy: { type: String, default: null },
   paymentHistory: { type: [historySchema], default: [] },
 
+  // Payment ledger (QR / UPI). Totals are recomputed from the entries on every change.
+  payments: { type: [paymentEntrySchema], default: [] },
+  amountPaidOnline: { type: Number, default: 0 },     // confirmed QR / UPI money
+  amountPendingOnline: { type: Number, default: 0 },  // reported, waiting for the Accounts team
+
   // Cash on delivery collection & settlement (separate from the order and payment status)
   expectedCollection: { type: Number, default: 0 },
   amountCollected: { type: Number, default: 0 },
@@ -159,10 +199,13 @@ const orderSchema = new mongoose.Schema({
 orderSchema.index({ farmerId: 1, idempotencyKey: 1 }, { unique: true, partialFilterExpression: { idempotencyKey: { $type: 'string' } } });
 orderSchema.index({ paymentReference: 1 }, { unique: true, partialFilterExpression: { paymentReference: { $gt: '' } } });
 orderSchema.index({ createdAt: -1 });
+orderSchema.index({ 'payments.status': 1, 'payments.submittedAt': -1 });
+orderSchema.index({ 'payments.reference': 1 });
 
 module.exports = mongoose.model('Order', orderSchema);
 module.exports.ORDER_STATUSES = ORDER_STATUSES;
 module.exports.PAYMENT_STATUSES = PAYMENT_STATUSES;
+module.exports.PAYMENT_ENTRY_STATUSES = PAYMENT_ENTRY_STATUSES;
 module.exports.COLLECTION_STATUSES = COLLECTION_STATUSES;
 module.exports.SETTLEMENT_STATUSES = SETTLEMENT_STATUSES;
 module.exports.VERIFICATION_OUTCOMES = VERIFICATION_OUTCOMES;

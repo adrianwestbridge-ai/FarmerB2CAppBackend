@@ -10,6 +10,7 @@
     "dev": "nodemon server.js",
     "seed": "node seedData.js",
     "migrate:v2": "node scripts/migrate-v2.js",
+    "migrate:v3": "node scripts/migrate-v3-payments.js",
     "test:e2e": "node tests/api.e2e.js"
   },
   "author": "",

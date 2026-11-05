@@ -7,10 +7,10 @@ const { audit } = require('../utils/audit');
 const { getSettings } = require('../utils/settings');
 const { requireValidId, cleanText, toMoney, parseDate, isValidId } = require('../utils/validators');
 
-// Cash a partner has collected on delivered COD orders but not yet handed over.
+// Cash a partner has collected on delivered orders (COD, or the balance of part-paid QR orders)
+// but not yet handed over.
 const outstandingFilter = (partnerId) => ({
   deliveredBy: partnerId,
-  paymentMethod: 'COD',
   amountCollected: { $gt: 0 },
   settlementStatus: 'PENDING',
 });
@@ -163,7 +163,7 @@ exports.listSettlements = async (req, res) => {
 // @route GET /api/settlements/outstanding — per-partner reconciliation snapshot
 exports.outstandingByPartner = async (req, res) => {
   const rows = await Order.aggregate([
-    { $match: { paymentMethod: 'COD', status: 'DELIVERED', deliveredBy: { $ne: null } } },
+    { $match: { status: 'DELIVERED', deliveredBy: { $ne: null }, $or: [{ paymentMethod: 'COD' }, { amountCollected: { $gt: 0 } }] } },
     {
       $group: {
         _id: '$deliveredBy',

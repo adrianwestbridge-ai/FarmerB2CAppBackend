@@ -95,17 +95,16 @@ exports.summary = async (req, res) => {
             discounts: { $sum: { $cond: [{ $in: ['$status', ['REJECTED', 'CANCELLED']] }, 0, '$discount'] } },
             deliveryCharges: { $sum: { $cond: [{ $eq: ['$status', 'DELIVERED'] }, '$deliveryCharge', 0] } },
             completedSales: { $sum: { $cond: [{ $eq: ['$status', 'DELIVERED'] }, '$totalAmount', 0] } },
-            codCollected: { $sum: { $cond: [{ $eq: ['$paymentMethod', 'COD'] }, '$amountCollected', 0] } },
-            onlineCollected: {
-              $sum: { $cond: [{ $and: [{ $eq: ['$paymentMethod', 'ONLINE'] }, { $in: ['$paymentStatus', ['PAID', 'REFUND_PENDING', 'REFUNDED']] }] }, '$totalAmount', 0] },
-            },
+            // Cash taken on delivery (any order) and QR / UPI money confirmed by the Accounts team.
+            codCollected: { $sum: '$amountCollected' },
+            onlineCollected: { $sum: { $ifNull: ['$amountPaidOnline', 0] } },
             refunded: { $sum: { $cond: [{ $eq: ['$paymentStatus', 'REFUNDED'] }, '$refundAmount', 0] } },
             refundsPending: { $sum: { $cond: [{ $eq: ['$paymentStatus', 'REFUND_PENDING'] }, '$refundAmount', 0] } },
             pendingPayments: {
               $sum: {
                 $cond: [
-                  { $and: [{ $in: ['$paymentStatus', ['PENDING', 'AWAITING_VERIFICATION', 'FAILED']] }, { $not: [{ $in: ['$status', ['REJECTED', 'CANCELLED']] }] }] },
-                  { $subtract: ['$totalAmount', '$amountCollected'] },
+                  { $and: [{ $in: ['$paymentStatus', ['PENDING', 'AWAITING_VERIFICATION', 'FAILED', 'PARTIALLY_PAID']] }, { $not: [{ $in: ['$status', ['REJECTED', 'CANCELLED']] }] }] },
+                  { $max: [0, { $subtract: [{ $subtract: ['$totalAmount', '$amountCollected'] }, { $ifNull: ['$amountPaidOnline', 0] }] }] },
                   0,
                 ],
               },
@@ -125,18 +124,14 @@ exports.summary = async (req, res) => {
             value: { $sum: { $cond: [{ $in: ['$status', ['REJECTED', 'CANCELLED']] }, 0, '$totalAmount'] } },
             collected: {
               $sum: {
-                $cond: [
-                  { $eq: ['$paymentMethod', 'COD'] },
-                  '$amountCollected',
-                  { $cond: [{ $in: ['$paymentStatus', ['PAID', 'REFUND_PENDING', 'REFUNDED']] }, '$totalAmount', 0] },
-                ],
+                $add: ['$amountCollected', { $ifNull: ['$amountPaidOnline', 0] }],
               },
             },
             pending: {
               $sum: {
                 $cond: [
-                  { $and: [{ $in: ['$paymentStatus', ['PENDING', 'AWAITING_VERIFICATION', 'FAILED']] }, { $not: [{ $in: ['$status', ['REJECTED', 'CANCELLED']] }] }] },
-                  { $subtract: ['$totalAmount', '$amountCollected'] },
+                  { $and: [{ $in: ['$paymentStatus', ['PENDING', 'AWAITING_VERIFICATION', 'FAILED', 'PARTIALLY_PAID']] }, { $not: [{ $in: ['$status', ['REJECTED', 'CANCELLED']] }] }] },
+                  { $max: [0, { $subtract: [{ $subtract: ['$totalAmount', '$amountCollected'] }, { $ifNull: ['$amountPaidOnline', 0] }] }] },
                   0,
                 ],
               },
@@ -268,6 +263,8 @@ exports.orders = async (req, res) => {
       { label: 'Payment mode', value: 'paymentMethod' },
       { label: 'Payment status', value: 'paymentStatus' },
       { label: 'Payment reference', value: 'paymentReference' },
+      { label: 'Paid by QR, confirmed (INR)', value: 'amountPaidOnline' },
+      { label: 'QR awaiting confirmation (INR)', value: 'amountPendingOnline' },
       { label: 'Approved/Rejected by', value: 'decisionByName' },
       { label: 'Decision at', value: 'decisionAt' },
       { label: 'Rejection reason', value: 'rejectionReason' },
@@ -316,7 +313,7 @@ const ADMIN_ACTION_LABELS = {
 
 // @route GET /api/reports/admins
 exports.adminActivity = async (req, res) => {
-  const match = { actorRole: { $in: ['SUPER_ADMIN', 'ADMIN', 'MODERATOR'] }, action: { $in: Object.values(ADMIN_ACTIONS) } };
+  const match = { actorRole: { $in: ['SUPER_ADMIN', 'ADMIN', 'MODERATOR', 'ACCOUNTS'] }, action: { $in: Object.values(ADMIN_ACTIONS) } };
   const range = dateRange(req.query);
   if (range) match.createdAt = range;
   if (req.query.adminId && isValidId(req.query.adminId)) match.actorId = String(req.query.adminId);
@@ -541,8 +538,8 @@ exports.activity = async (req, res) => {
   const range = dateRange(req.query);
   if (range) filter.createdAt = range;
   const role = String(req.query.role || '').toUpperCase();
-  if (role === 'ADMIN') filter.actorRole = { $in: ['SUPER_ADMIN', 'ADMIN', 'MODERATOR'] };
-  else if (['FARMER', 'PARTNER', 'SUPER_ADMIN', 'MODERATOR', 'ANONYMOUS'].includes(role)) filter.actorRole = role;
+  if (role === 'ADMIN') filter.actorRole = { $in: ['SUPER_ADMIN', 'ADMIN', 'MODERATOR', 'ACCOUNTS'] };
+  else if (['FARMER', 'PARTNER', 'SUPER_ADMIN', 'MODERATOR', 'ACCOUNTS', 'ANONYMOUS'].includes(role)) filter.actorRole = role;
   if (req.query.actorId) filter.actorId = cleanText(req.query.actorId, 40);
   if (req.query.entityType) filter.entityType = cleanText(req.query.entityType, 30).toUpperCase();
   if (req.query.action) filter.action = cleanText(req.query.action, 60).toUpperCase();
@@ -602,11 +599,7 @@ const periodTotals = async (from) => {
         discounts: { $sum: { $cond: [{ $in: ['$status', ['REJECTED', 'CANCELLED']] }, 0, '$discount'] } },
         collected: {
           $sum: {
-            $cond: [
-              { $eq: ['$paymentMethod', 'COD'] },
-              '$amountCollected',
-              { $cond: [{ $in: ['$paymentStatus', ['PAID', 'REFUND_PENDING', 'REFUNDED']] }, '$totalAmount', 0] },
-            ],
+            $add: ['$amountCollected', { $ifNull: ['$amountPaidOnline', 0] }],
           },
         },
       },
@@ -648,7 +641,7 @@ exports.overview = async (req, res) => {
     Order.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]),
     Order.aggregate([
       { $match: { paymentStatus: { $in: ['AWAITING_VERIFICATION', 'REFUND_PENDING'] } } },
-      { $group: { _id: '$paymentStatus', count: { $sum: 1 }, amount: { $sum: { $cond: [{ $eq: ['$paymentStatus', 'REFUND_PENDING'] }, '$refundAmount', '$totalAmount'] } } } },
+      { $group: { _id: '$paymentStatus', count: { $sum: 1 }, amount: { $sum: { $cond: [{ $eq: ['$paymentStatus', 'REFUND_PENDING'] }, '$refundAmount', { $ifNull: ['$amountPendingOnline', '$totalAmount'] }] } } } },
     ]),
     Order.aggregate([{ $match: { settlementStatus: 'PENDING', amountCollected: { $gt: 0 } } }, { $group: { _id: null, amount: { $sum: '$amountCollected' } } }]),
     Settlement.aggregate([{ $match: { status: { $in: ['SUBMITTED', 'DISPUTED'] } } }, { $group: { _id: '$status', count: { $sum: 1 }, amount: { $sum: '$submittedAmount' } } }]),

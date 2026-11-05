@@ -475,7 +475,8 @@ async function login(identifier, password) {
     expectStatus(await call('PATCH', `/orders/${o._id}/pickup`, { token: ctx.partnerA.token }), 200);
     const d = expectStatus(await call('PATCH', `/orders/${o._id}/deliver`, { token: ctx.partnerA.token, body: { amountCollected: o.totalAmount - 20 } }), 200).data;
     assert.equal(d.collectionStatus, 'DISPUTED');
-    assert.equal(d.paymentStatus, 'PENDING');
+    assert.equal(d.paymentStatus, 'PARTIALLY_PAID', 'short cash leaves a balance due');
+    assert.equal(d.balanceDue, 20);
     assert.equal(d.amountCollected, money(o.totalAmount - 20));
     ctx.shortOrder = d;
   });
@@ -976,6 +977,170 @@ async function login(identifier, password) {
     assert.equal(list.length, 0, 'deleted farmer hidden from the directory');
 
     expectStatus(await call('POST', '/auth/register', { body: { name: 'New Owner', phoneNumber: p, username: `${u}x`, password: 'Fresh@12', confirmPassword: 'Fresh@12' } }), 201);
+  });
+
+  // ═══ 12. Part payments by QR & the Accounts team ═══════════════════════════
+  console.log('\n12. Part payments by QR & the Accounts team');
+
+  await step('Accounts team role: logs in with payment permission only; Super Admin can create one', async () => {
+    ctx.accounts = await login('accounts_team', 'Acc@1234');
+    assert.deepEqual(ctx.accounts.permissions, ['PAYMENTS_VERIFY']);
+    const stamp = String(Date.now()).slice(-6);
+    const a = expectStatus(await call('POST', '/admins', { token: ctx.superAdmin.token, body: { username: `acc_${stamp}`, name: 'Second Accountant', password: 'Acc@5678', confirmPassword: 'Acc@5678', role: 'ACCOUNTS' } }), 201).data;
+    assert.equal(a.role, 'ACCOUNTS');
+    assert.deepEqual(a.effectivePermissions, ['PAYMENTS_VERIFY']);
+  });
+
+  await step('farmer pays only part of the bill by QR; the rest becomes cash on delivery', async () => {
+    const items = [{ productId: ctx.npk._id, quantity: 4 }];
+    const q = expectStatus(await call('POST', '/orders/quote', { token: ctx.farmer.token, body: { items } }), 200).data;
+    const total = q.totalAmount;
+    let res = await call('POST', '/orders', { token: ctx.farmer.token, body: { items, deliveryAddress: 'Farm', paymentMethod: 'ONLINE', paymentReference: utr12(), paidAmount: total + 1 } });
+    assert.equal(res.body.code, 'PAYMENT_AMOUNT_TOO_HIGH');
+    res = await call('POST', '/orders', { token: ctx.farmer.token, body: { items, deliveryAddress: 'Farm', paymentMethod: 'ONLINE', paymentReference: utr12(), paidAmount: -5 } });
+    assert.equal(res.body.code, 'PAYMENT_AMOUNT_INVALID');
+    const part = Math.round(total / 2);
+    ctx.partUtr = utr12();
+    const o = expectStatus(await call('POST', '/orders', { token: ctx.farmer.token, body: { items, deliveryAddress: 'Farm', paymentMethod: 'ONLINE', paymentReference: ctx.partUtr, paidAmount: part } }), 201).data;
+    assert.equal(o.paymentStatus, 'AWAITING_VERIFICATION');
+    assert.equal(o.amountPendingOnline, part);
+    assert.equal(o.amountPaidOnline, 0);
+    assert.equal(o.expectedCollection, Math.round((total - part) * 100) / 100, 'partner collects the rest');
+    assert.equal(o.collectionStatus, 'PENDING');
+    assert.equal(o.balanceDue, total);
+    assert.equal(o.payments.length, 1);
+    ctx.partOrder = o;
+    ctx.partTotal = total;
+    ctx.part = part;
+  });
+
+  await step('Accounts team sees the payment; others without permission do not; report is Super Admin only', async () => {
+    const list = expectStatus(await call('GET', '/payments?status=PENDING', { token: ctx.accounts.token }), 200).data;
+    const row = list.find((r) => r.entry.reference === ctx.partUtr);
+    assert.ok(row, 'pending QR payment listed');
+    assert.equal(row.order.orderNumber, ctx.partOrder.orderNumber);
+    assert.equal(row.order.balanceDue, ctx.partTotal);
+    expectStatus(await call('GET', '/payments', { token: ctx.moderator.token }), 403);
+    expectStatus(await call('GET', '/payments', { token: ctx.farmer.token }), 403);
+    expectStatus(await call('GET', '/payments/summary', { token: ctx.accounts.token }), 403);
+    // Accounts team cannot approve orders or edit entries.
+    expectStatus(await call('PATCH', `/orders/${ctx.partOrder._id}/approve`, { token: ctx.accounts.token }), 403);
+    expectStatus(await call('PATCH', `/orders/${ctx.partOrder._id}/payments/${ctx.partOrder.payments[0]._id}`, { token: ctx.accounts.token, body: { amount: 1, reason: 'test' } }), 403);
+  });
+
+  await step('Accounts team confirms what actually arrived (less than reported) → part paid, cash due goes up', async () => {
+    const entryId = ctx.partOrder.payments[0]._id;
+    const received = ctx.part - 100;
+    let res = await call('PATCH', `/orders/${ctx.partOrder._id}/payments/${entryId}/review`, { token: ctx.accounts.token, body: { approved: true, amount: ctx.partTotal + 10 } });
+    assert.equal(res.body.code, 'PAYMENT_AMOUNT_TOO_HIGH');
+    const o = expectStatus(await call('PATCH', `/orders/${ctx.partOrder._id}/payments/${entryId}/review`, { token: ctx.accounts.token, body: { approved: true, amount: received } }), 200).data;
+    assert.equal(o.paymentStatus, 'PARTIALLY_PAID');
+    assert.equal(o.amountPaidOnline, received);
+    assert.equal(o.amountPendingOnline, 0);
+    assert.equal(o.expectedCollection, Math.round((ctx.partTotal - received) * 100) / 100);
+    assert.equal(o.payments[0].reviewedByName, 'Accounts Team');
+    res = await call('PATCH', `/orders/${ctx.partOrder._id}/payments/${entryId}/review`, { token: ctx.accounts.token, body: { approved: true } });
+    assert.equal(res.body.code, 'PAYMENT_NOT_AWAITING', 'an entry is reviewed once');
+    ctx.received = received;
+  });
+
+  await step('farmer pays more later by QR; the same UTR cannot be reused; rejected payment raises cash due again', async () => {
+    let res = await call('PATCH', `/orders/${ctx.partOrder._id}/payment-reference`, { token: ctx.farmer.token, body: { paymentReference: ctx.partUtr, amount: 50 } });
+    assert.equal(res.body.code, 'PAYMENT_REFERENCE_USED');
+    res = await call('PATCH', `/orders/${ctx.partOrder._id}/payment-reference`, { token: ctx.farmer.token, body: { paymentReference: utr12(), amount: ctx.partTotal } });
+    assert.equal(res.body.code, 'PAYMENT_AMOUNT_TOO_HIGH', 'cannot pay more than is still open');
+    let o = expectStatus(await call('PATCH', `/orders/${ctx.partOrder._id}/payment-reference`, { token: ctx.farmer.token, body: { paymentReference: utr12(), amount: 100 } }), 200).data;
+    assert.equal(o.paymentStatus, 'AWAITING_VERIFICATION');
+    assert.equal(o.amountPendingOnline, 100);
+    const due = Math.round((ctx.partTotal - ctx.received - 100) * 100) / 100;
+    assert.equal(o.expectedCollection, due, 'partner is told the lower amount straight away');
+    const second = o.payments[1]._id;
+    res = await call('PATCH', `/orders/${ctx.partOrder._id}/payments/${second}/review`, { token: ctx.accounts.token, body: { approved: false } });
+    assert.equal(res.body.code, 'ORDER_REASON_REQUIRED');
+    o = expectStatus(await call('PATCH', `/orders/${ctx.partOrder._id}/payments/${second}/review`, { token: ctx.accounts.token, body: { approved: false, reason: 'Not in bank statement' } }), 200).data;
+    assert.equal(o.paymentStatus, 'PARTIALLY_PAID');
+    assert.equal(o.expectedCollection, Math.round((ctx.partTotal - ctx.received) * 100) / 100);
+    const farmerView = expectStatus(await call('GET', `/orders/${ctx.partOrder._id}`, { token: ctx.farmer.token }), 200).data;
+    assert.equal(farmerView.payments[1].status, 'REJECTED');
+    assert.equal(farmerView.payments[1].rejectReason, 'Not in bank statement');
+    assert.equal(farmerView.payments[1].reviewedById, undefined, 'farmers do not see staff ids');
+  });
+
+  await step('Super Admin records a payment and corrects an entry; partner sees the updated cash to collect', async () => {
+    let res = await call('POST', `/orders/${ctx.partOrder._id}/payments`, { token: ctx.superAdmin.token, body: { amount: 100 } });
+    assert.equal(res.body.code, 'ORDER_REASON_REQUIRED');
+    expectStatus(await call('POST', `/orders/${ctx.partOrder._id}/payments`, { token: ctx.opsAdmin.token, body: { amount: 100, note: 'x' } }), 403);
+    let o = expectStatus(await call('POST', `/orders/${ctx.partOrder._id}/payments`, { token: ctx.superAdmin.token, body: { amount: 100, note: 'Farmer paid by QR and called the helpline' } }), 201).data;
+    assert.equal(o.amountPaidOnline, ctx.received + 100);
+    const firstId = o.payments[0]._id;
+    o = expectStatus(await call('PATCH', `/orders/${ctx.partOrder._id}/payments/${firstId}`, { token: ctx.superAdmin.token, body: { amount: ctx.part, reason: 'Bank statement shows the full amount' } }), 200).data;
+    assert.equal(o.payments[0].confirmedAmount, ctx.part);
+    assert.equal(o.payments[0].edits.length, 1);
+    assert.equal(o.payments[0].edits[0].fromAmount, ctx.received);
+    const paid = ctx.part + 100;
+    assert.equal(o.amountPaidOnline, paid);
+    ctx.cashDue = Math.round((ctx.partTotal - paid) * 100) / 100;
+    assert.equal(o.expectedCollection, ctx.cashDue);
+    assert.equal(o.balanceDue, ctx.cashDue);
+  });
+
+  await step('Super Admin report: totals and what each Accounts team member confirmed / rejected', async () => {
+    const r = expectStatus(await call('GET', '/payments/summary', { token: ctx.superAdmin.token }), 200).data;
+    const acc = r.byReviewer.find((x) => x.reviewerId === ctx.accounts.data._id);
+    assert.ok(acc, 'accounts team member listed');
+    assert.ok(acc.confirmedCount >= 1 && acc.rejectedCount >= 1);
+    assert.ok(r.confirmed.received >= ctx.part + 100);
+    assert.ok(r.recentEdits.some((e) => e.orderNumber === ctx.partOrder.orderNumber));
+    const audit = expectStatus(await call('GET', '/reports/activity?action=PAYMENT_EDITED', { token: ctx.superAdmin.token }), 200).data;
+    assert.ok(audit.some((a) => a.entityRef === ctx.partOrder.orderNumber || (a.metadata && a.metadata.fromAmount === ctx.received)));
+  });
+
+  await step('delivery partner collects exactly the balance; order becomes fully paid', async () => {
+    const id = ctx.partOrder._id;
+    expectStatus(await call('PATCH', `/orders/${id}/verification`, { token: ctx.moderator.token, body: { outcome: 'CONFIRMED', note: 'ok' } }), 200);
+    expectStatus(await call('PATCH', `/orders/${id}/approve`, { token: ctx.moderator.token }), 200);
+    const pool = expectStatus(await call('GET', `/orders/${id}`, { token: ctx.partnerA.token }), 200).data;
+    assert.equal(pool.expectedCollection, ctx.cashDue, 'partner sees what is left to collect');
+    assert.equal(pool.amountPaidOnline, ctx.part + 100);
+    expectStatus(await call('PATCH', `/orders/${id}/accept`, { token: ctx.partnerA.token }), 200);
+    expectStatus(await call('PATCH', `/orders/${id}/pickup`, { token: ctx.partnerA.token }), 200);
+    const d = expectStatus(await call('PATCH', `/orders/${id}/deliver`, { token: ctx.partnerA.token, body: { amountCollected: ctx.cashDue } }), 200).data;
+    assert.equal(d.status, 'DELIVERED');
+    assert.equal(d.paymentStatus, 'PAID');
+    assert.equal(d.collectionStatus, 'COLLECTED');
+    assert.equal(d.balanceDue, 0);
+    assert.equal(d.settlementStatus, 'PENDING', 'cash goes into the partner hand-over');
+    const res = await call('PATCH', `/orders/${id}/payment-reference`, { token: ctx.farmer.token, body: { paymentReference: utr12(), amount: 1 } });
+    assert.equal(res.body.code, 'PAYMENT_NOTHING_DUE');
+  });
+
+  await step('short cash on delivery leaves a balance the farmer can clear later by QR', async () => {
+    const items = [{ productId: ctx.npk._id, quantity: 1 }];
+    const o = expectStatus(await call('POST', '/orders', { token: ctx.farmer.token, body: { items, deliveryAddress: 'Farm', paymentMethod: 'COD' } }), 201).data;
+    expectStatus(await call('PATCH', `/orders/${o._id}/verification`, { token: ctx.moderator.token, body: { outcome: 'CONFIRMED', note: 'ok' } }), 200);
+    expectStatus(await call('PATCH', `/orders/${o._id}/approve`, { token: ctx.moderator.token }), 200);
+    expectStatus(await call('PATCH', `/orders/${o._id}/accept`, { token: ctx.partnerA.token }), 200);
+    expectStatus(await call('PATCH', `/orders/${o._id}/pickup`, { token: ctx.partnerA.token }), 200);
+    const short = Math.round((o.totalAmount - 50) * 100) / 100;
+    let d = expectStatus(await call('PATCH', `/orders/${o._id}/deliver`, { token: ctx.partnerA.token, body: { amountCollected: short } }), 200).data;
+    assert.equal(d.paymentStatus, 'PARTIALLY_PAID');
+    assert.equal(d.balanceDue, 50);
+    assert.equal(d.collectionStatus, 'DISPUTED');
+    d = expectStatus(await call('PATCH', `/orders/${o._id}/payment-reference`, { token: ctx.farmer.token, body: { paymentReference: utr12(), amount: 50 } }), 200).data;
+    d = expectStatus(await call('PATCH', `/orders/${o._id}/payments/${d.payments[0]._id}/review`, { token: ctx.accounts.token, body: { approved: true } }), 200).data;
+    assert.equal(d.paymentStatus, 'PAID');
+    assert.equal(d.balanceDue, 0);
+  });
+
+  await step('cancelled part-paid order: refund is what was actually confirmed', async () => {
+    const items = [{ productId: ctx.npk._id, quantity: 1 }];
+    let o = expectStatus(await call('POST', '/orders', { token: ctx.farmer.token, body: { items, deliveryAddress: 'Farm', paymentMethod: 'ONLINE', paymentReference: utr12(), paidAmount: 40 } }), 201).data;
+    o = expectStatus(await call('PATCH', `/orders/${o._id}/payments/${o.payments[0]._id}/review`, { token: ctx.accounts.token, body: { approved: true } }), 200).data;
+    assert.equal(o.paymentStatus, 'PARTIALLY_PAID');
+    o = expectStatus(await call('PATCH', `/orders/${o._id}/cancel`, { token: ctx.farmer.token, body: { reason: 'Changed my mind' } }), 200).data;
+    assert.equal(o.paymentStatus, 'REFUND_PENDING');
+    assert.equal(o.refundAmount, 40);
+    assert.equal(o.expectedCollection, 0);
   });
 
   console.log(`\n${passed} passed, ${failures.length} failed`);

@@ -1,3 +1,4 @@
+const Order = require('../models/Order');
 const ExcelJS = require('exceljs');
 const Farmer = require('../models/Farmer');
 const Partner = require('../models/Partner');
@@ -191,6 +192,31 @@ const buildWorkbook = async ({ query, includeAdmins, generatedBy }) => {
       { label: 'Created on', value: 'createdAt' }, { label: 'Last login', value: 'lastLoginAt' },
     ], admins);
     addSheet(wb, 'Admin decisions', adminActivity.columns, adminActivity.rows);
+
+    // Accounts team record: every QR payment, who confirmed / rejected it and what arrived.
+    const range = {};
+    if (q.from) range.$gte = new Date(`${q.from}T00:00:00+05:30`);
+    if (q.to) range.$lte = new Date(`${q.to}T23:59:59.999+05:30`);
+    const entries = await Order.aggregate([
+      { $match: { 'payments.0': { $exists: true } } },
+      { $unwind: '$payments' },
+      ...(q.from || q.to ? [{ $match: { 'payments.submittedAt': range } }] : []),
+      { $sort: { 'payments.submittedAt': -1 } },
+      { $limit: 20000 },
+    ]);
+    addSheet(wb, 'QR payments', [
+      { label: 'Order', value: 'orderNumber' }, { label: 'Farmer', value: 'farmerName' }, { label: 'Mobile', value: 'farmerPhone' },
+      { label: 'Order total (INR)', value: 'totalAmount' },
+      { label: 'Reported on', value: (r) => r.payments.submittedAt }, { label: 'UTR', value: (r) => r.payments.reference },
+      { label: 'Source', value: (r) => (r.payments.source === 'MANUAL' ? 'Recorded by Super Admin' : 'Farmer QR') },
+      { label: 'Reported (INR)', value: (r) => r.payments.amount }, { label: 'Status', value: (r) => r.payments.status },
+      { label: 'Received (INR)', value: (r) => r.payments.confirmedAmount },
+      { label: 'Confirmed / rejected by', value: (r) => r.payments.reviewedByName }, { label: 'Reviewed on', value: (r) => r.payments.reviewedAt },
+      { label: 'Reject reason', value: (r) => r.payments.rejectReason }, { label: 'Note', value: (r) => r.payments.note },
+      { label: 'Corrections', value: (r) => (r.payments.edits || []).map((e) => `${e.byName}: ${e.fromStatus} ${e.fromAmount} -> ${e.toStatus} ${e.toAmount} (${e.reason})`).join('; ') },
+      { label: 'Order paid by QR (INR)', value: 'amountPaidOnline' }, { label: 'Cash collected (INR)', value: 'amountCollected' },
+      { label: 'Payment status', value: 'paymentStatus' },
+    ], entries);
   }
 
   addSheet(wb, 'Settlements', settlements.columns, settlements.rows);

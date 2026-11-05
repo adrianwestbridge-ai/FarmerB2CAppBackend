@@ -123,6 +123,16 @@ const seedData = async () => {
         permissions: DEFAULT_PERMISSIONS.ADMIN,
         status: 'Active',
       },
+      {
+        owner_id: 'admin_004',
+        username: 'accounts_team',
+        password: 'Acc@1234',
+        name: 'Accounts Team',
+        phoneNumber: '9811144455',
+        role: 'ACCOUNTS',
+        permissions: DEFAULT_PERMISSIONS.ACCOUNTS,
+        status: 'Active',
+      },
     ]);
 
     // ─── 2. SEED FARMERS ───────────────────────────────────────────────────────
@@ -1093,6 +1103,7 @@ const seedData = async () => {
     console.log('Super Admin       : admin_username (Password: Admin@123)');
     console.log('Admin             : ops_admin (Password: Ops@1234)');
     console.log('Moderator         : mod_username (Password: Mod@123)');
+    console.log('Accounts team     : accounts_team (Password: Acc@1234)');
     console.log('Partner Phone     : 9888877777 (Password: 123456)');
     console.log('----------------------------------------------------');
 

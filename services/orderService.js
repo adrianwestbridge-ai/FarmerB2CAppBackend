@@ -8,6 +8,7 @@ const { audit, actorRoleOf } = require('../utils/audit');
 const { getSettings } = require('../utils/settings');
 const { cleanText, cleanImage, toMoney, requireValidId } = require('../utils/validators');
 const { priceCart } = require('./pricingService');
+const payments = require('./paymentService');
 
 // Statuses from which the reserved stock is still held by the order (goods not handed over).
 const STOCK_HELD = ['PENDING_APPROVAL', 'APPROVED', 'ASSIGNED', 'DELIVERY_FAILED'];
@@ -97,18 +98,8 @@ const releaseStock = async (lines) => {
 
 // ─── Payment side effects of an order ending without delivery ───────────────
 
-const settlePaymentOnTermination = (order, req) => {
-  if (order.paymentStatus === 'PAID') {
-    pushPayment(order, 'REFUND_PENDING', req, 'Order did not complete; refund due');
-    order.refundAmount = order.totalAmount;
-  } else if (order.paymentStatus === 'PENDING' || order.paymentStatus === 'FAILED') {
-    pushPayment(order, 'CANCELLED', req, 'No payment due');
-  }
-  // AWAITING_VERIFICATION stays as-is: the admin still verifies whether money arrived; if it did,
-  // verification moves it straight to REFUND_PENDING.
-  order.expectedCollection = 0;
-  if (order.collectionStatus === 'PENDING') order.collectionStatus = 'NOT_APPLICABLE';
-};
+// Recomputed from the payment ledger: confirmed QR money becomes a refund, nothing else is owed.
+const settlePaymentOnTermination = (order, req) => payments.recomputePayment(order, req);
 
 const clearAssignment = (order) => {
   order.assignedPartnerId = null;
@@ -121,16 +112,7 @@ const clearAssignment = (order) => {
 
 // ─── Farmer: place order ─────────────────────────────────────────────────────
 
-// UPI transaction reference (UTR / RRN) is always 12 digits.
-const PAYMENT_REF_RE = /^\d{12}$/;
-
-const normalizeReference = (value) => cleanText(value, 60).replace(/\s+/g, '').toUpperCase();
-
-const assertReferenceUnused = async (reference, excludeOrderId) => {
-  const filter = { paymentReference: reference };
-  if (excludeOrderId) filter._id = { $ne: excludeOrderId };
-  if (await Order.exists(filter)) throw new AppError(400, 'PAYMENT_REFERENCE_USED');
-};
+const { PAYMENT_REF_RE, normalizeReference } = payments;
 
 const placeOrder = async (req, body) => {
   const farmer = req.user;
@@ -156,7 +138,7 @@ const placeOrder = async (req, body) => {
     paymentReference = normalizeReference(body.paymentReference);
     if (!paymentReference) throw new AppError(400, 'PAYMENT_REFERENCE_REQUIRED');
     if (!PAYMENT_REF_RE.test(paymentReference)) throw new AppError(400, 'PAYMENT_REFERENCE_INVALID');
-    await assertReferenceUnused(paymentReference);
+    await payments.assertReferenceUnused(paymentReference, null);
   }
 
   const quote = await priceCart(body.items, { strict: true });
@@ -192,20 +174,17 @@ const placeOrder = async (req, body) => {
       statusHistory: [{ status: 'PENDING_APPROVAL', at: now, ...actorOf(req), note: 'Order placed' }],
       trackingNote: 'Waiting for admin approval',
       paymentMethod,
-      paymentStatus: paymentMethod === 'ONLINE' ? 'AWAITING_VERIFICATION' : 'PENDING',
-      paymentReference,
-      paymentSubmittedAt: paymentMethod === 'ONLINE' ? now : null,
-      paymentHistory: [{
-        status: paymentMethod === 'ONLINE' ? 'AWAITING_VERIFICATION' : 'PENDING',
-        at: now,
-        ...actorOf(req),
-        note: paymentMethod === 'ONLINE' ? `Reference ${paymentReference} submitted` : 'Cash on delivery',
-      }],
-      expectedCollection: paymentMethod === 'COD' ? quote.totalAmount : 0,
-      collectionStatus: paymentMethod === 'COD' ? 'PENDING' : 'NOT_APPLICABLE',
+      paymentStatus: 'PENDING',
+      paymentHistory: [],
       settlementStatus: 'NOT_APPLICABLE',
       idempotencyKey,
     });
+    if (paymentMethod === 'ONLINE') {
+      // The farmer may pay only part by QR (paidAmount); the rest is collected in cash on delivery.
+      await payments.addFarmerPayment(req, order, { paymentReference, amount: body.paidAmount });
+    } else {
+      payments.recomputePayment(order, req, 'Cash on delivery');
+    }
     await order.save();
   } catch (err) {
     await releaseStock(quote.items);
@@ -429,7 +408,8 @@ const partnerDeliver = async (req, id, body) => {
   assertStatus(order, ['OUT_FOR_DELIVERY']);
   const now = new Date();
 
-  if (order.paymentMethod === 'COD') {
+  // Cash is collected for whatever QR payments do not cover (full total for COD orders).
+  if (order.expectedCollection > 0) {
     const collected = Number(body.amountCollected);
     if (body.amountCollected === undefined || body.amountCollected === null || body.amountCollected === '' || !Number.isFinite(collected) || collected < 0) {
       throw new AppError(400, 'COLLECTION_AMOUNT_INVALID');
@@ -437,20 +417,8 @@ const partnerDeliver = async (req, id, body) => {
     order.amountCollected = toMoney(collected);
     order.collectedAt = now;
     order.collectionNote = cleanText(body.collectionNote, 300);
-    if (order.amountCollected === toMoney(order.expectedCollection)) {
-      order.collectionStatus = 'COLLECTED';
-      pushPayment(order, 'PAID', req, `Cash ₹${order.amountCollected} collected`);
-      order.paidAt = now;
-    } else {
-      // Short or excess collection is flagged for the admin to reconcile.
-      order.collectionStatus = 'DISPUTED';
-      if (order.amountCollected >= order.totalAmount) {
-        pushPayment(order, 'PAID', req, `Cash ₹${order.amountCollected} collected (expected ₹${order.expectedCollection})`);
-        order.paidAt = now;
-      } else {
-        order.paymentHistory.push({ status: order.paymentStatus, at: now, ...actorOf(req), note: `Short collection: ₹${order.amountCollected} of ₹${order.expectedCollection}` });
-      }
-    }
+    // Short or excess collection is flagged for the admin to reconcile.
+    order.collectionStatus = order.amountCollected === toMoney(order.expectedCollection) ? 'COLLECTED' : 'DISPUTED';
     order.settlementStatus = order.amountCollected > 0 ? 'PENDING' : 'NOT_APPLICABLE';
   } else if (body.markAsPaid || (body.amountCollected !== undefined && Number(body.amountCollected) > 0)) {
     throw new AppError(403, 'COLLECTION_ONLINE_FORBIDDEN');
@@ -463,6 +431,14 @@ const partnerDeliver = async (req, id, body) => {
   order.assignmentHistory.push({ action: 'DELIVERED', partnerId: String(req.user._id), partnerName: req.user.name, ...actorOf(req) });
   pushStatus(order, 'DELIVERED', req, order.deliveryNote || 'Delivered');
   order.trackingNote = 'Delivered.';
+  if (order.expectedCollection > 0) {
+    const short = order.amountCollected < order.expectedCollection;
+    payments.recomputePayment(order, req, short
+      ? `Short collection: cash ₹${order.amountCollected} of ₹${order.expectedCollection}`
+      : `Cash ₹${order.amountCollected} collected`);
+  } else {
+    payments.recomputePayment(order, req);
+  }
   await saveOrder(order);
   await auditOrder(req, order, 'ORDER_DELIVERED', {
     fromStatus: 'OUT_FOR_DELIVERY',
@@ -505,53 +481,73 @@ const releaseOrdersOfPartner = async (req, partner, reason) => {
 
 // ─── Payments ────────────────────────────────────────────────────────────────
 
-const submitPaymentReference = async (req, id, { paymentReference }) => {
+const assertOnlinePaymentsOpen = async () => {
+  const settings = await getSettings();
+  if (!settings.onlineEnabled || !settings.upiQrImage) throw new AppError(400, 'PAYMENT_METHOD_DISABLED');
+};
+
+/** Farmer reports a (further) QR payment for an order: any amount up to what is still open. */
+const submitPaymentReference = async (req, id, { paymentReference, amount }) => {
   const order = await loadOrder(id);
   if (String(order.farmerId) !== String(req.user._id)) throw new AppError(404, 'ORDER_NOT_FOUND');
-  if (order.paymentMethod !== 'ONLINE' || !['PENDING', 'FAILED'].includes(order.paymentStatus)
-    || ['REJECTED', 'CANCELLED'].includes(order.status)) {
-    throw new AppError(409, 'ORDER_TRANSITION_INVALID', { status: order.paymentStatus });
-  }
-  const reference = normalizeReference(paymentReference);
-  if (!reference) throw new AppError(400, 'PAYMENT_REFERENCE_REQUIRED');
-  if (!PAYMENT_REF_RE.test(reference)) throw new AppError(400, 'PAYMENT_REFERENCE_INVALID');
-  await assertReferenceUnused(reference, order._id);
+  if (['REJECTED', 'CANCELLED'].includes(order.status)) throw new AppError(409, 'ORDER_TRANSITION_INVALID', { status: order.status });
+  await assertOnlinePaymentsOpen();
   const from = order.paymentStatus;
-  order.paymentReference = reference;
-  order.paymentSubmittedAt = new Date();
-  order.paymentFailureReason = '';
-  pushPayment(order, 'AWAITING_VERIFICATION', req, `Reference ${reference} submitted`);
+  const entry = await payments.addFarmerPayment(req, order, { paymentReference, amount });
   await saveOrder(order);
-  await auditOrder(req, order, 'PAYMENT_REFERENCE_SUBMITTED', { fromStatus: from, toStatus: 'AWAITING_VERIFICATION', metadata: { reference } });
+  await auditOrder(req, order, 'PAYMENT_REFERENCE_SUBMITTED', { fromStatus: from, toStatus: order.paymentStatus, metadata: { reference: entry.reference, amount: entry.amount, entryId: String(entry._id) } });
   return order;
 };
 
-const verifyPayment = async (req, id, { approved, reason }) => {
+/** Accounts team: confirm (with the amount received) or reject one reported QR payment. */
+const reviewPaymentEntry = async (req, id, entryId, body) => {
   const order = await loadOrder(id);
-  if (order.paymentStatus !== 'AWAITING_VERIFICATION') throw new AppError(409, 'PAYMENT_NOT_AWAITING');
-  const now = new Date();
-  if (approved === true || approved === 'true') {
-    order.paymentVerifiedBy = String(req.user._id);
-    order.paymentVerifiedByName = req.user.name || req.user.username;
-    order.paidAt = now;
-    if (['REJECTED', 'CANCELLED'].includes(order.status)) {
-      order.refundAmount = order.totalAmount;
-      pushPayment(order, 'REFUND_PENDING', req, 'Payment verified on a cancelled order; refund due');
-    } else {
-      pushPayment(order, 'PAID', req, `Verified reference ${order.paymentReference}`);
-    }
-    await saveOrder(order);
-    await auditOrder(req, order, 'PAYMENT_VERIFIED', { fromStatus: 'AWAITING_VERIFICATION', toStatus: order.paymentStatus, metadata: { reference: order.paymentReference } });
-  } else {
-    const clean = requireReason(reason);
-    order.paymentFailureReason = clean;
-    order.paymentVerifiedBy = String(req.user._id);
-    order.paymentVerifiedByName = req.user.name || req.user.username;
-    const terminal = ['REJECTED', 'CANCELLED'].includes(order.status);
-    pushPayment(order, terminal ? 'CANCELLED' : 'FAILED', req, clean);
-    await saveOrder(order);
-    await auditOrder(req, order, 'PAYMENT_REJECTED', { fromStatus: 'AWAITING_VERIFICATION', toStatus: order.paymentStatus, reason: clean });
-  }
+  const entry = payments.findEntry(order, entryId);
+  const from = order.paymentStatus;
+  payments.reviewEntry(req, order, entry, body || {});
+  await saveOrder(order);
+  await auditOrder(req, order, entry.status === 'CONFIRMED' ? 'PAYMENT_VERIFIED' : 'PAYMENT_REJECTED', {
+    fromStatus: from,
+    toStatus: order.paymentStatus,
+    reason: entry.rejectReason || '',
+    metadata: { entryId: String(entry._id), reference: entry.reference, reported: entry.amount, confirmed: entry.confirmedAmount },
+  });
+  return order;
+};
+
+/** Older clients: review the oldest waiting payment of the order. */
+const verifyPayment = async (req, id, body) => {
+  const order = await loadOrder(id);
+  const entry = (order.payments || []).find((p) => p.status === 'PENDING');
+  if (!entry) throw new AppError(409, 'PAYMENT_NOT_AWAITING');
+  return reviewPaymentEntry(req, id, entry._id, body);
+};
+
+/** Super Admin: correct an entry (amount / status) with a reason. */
+const editPaymentEntry = async (req, id, entryId, body) => {
+  const order = await loadOrder(id);
+  const entry = payments.findEntry(order, entryId);
+  const from = order.paymentStatus;
+  payments.editEntry(req, order, entry, body || {});
+  await saveOrder(order);
+  const edit = entry.edits[entry.edits.length - 1];
+  await auditOrder(req, order, 'PAYMENT_EDITED', {
+    fromStatus: from,
+    toStatus: order.paymentStatus,
+    reason: edit.reason,
+    metadata: { entryId: String(entry._id), fromAmount: edit.fromAmount, toAmount: edit.toAmount, fromEntryStatus: edit.fromStatus, toEntryStatus: edit.toStatus },
+  });
+  return order;
+};
+
+/** Super Admin: record a payment received outside the app (e.g. reported on the helpline). */
+const addManualPayment = async (req, id, body) => {
+  const order = await loadOrder(id);
+  if (['REJECTED', 'CANCELLED'].includes(order.status)) throw new AppError(409, 'ORDER_TRANSITION_INVALID', { status: order.status });
+  const from = order.paymentStatus;
+  const entry = await payments.addManualEntry(req, order, body || {});
+  await saveOrder(order);
+  await auditOrder(req, order, 'PAYMENT_RECORDED', { fromStatus: from, toStatus: order.paymentStatus, reason: entry.note, metadata: { entryId: String(entry._id), amount: entry.confirmedAmount, reference: entry.reference } });
   return order;
 };
 
@@ -588,6 +584,9 @@ module.exports = {
   releaseOrdersOfPartner,
   submitPaymentReference,
   verifyPayment,
+  reviewPaymentEntry,
+  editPaymentEntry,
+  addManualPayment,
   recordRefund,
   loadOrder,
   saveOrder,

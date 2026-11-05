@@ -28,9 +28,13 @@ const DEFAULT_PERMISSIONS = {
     PERMISSIONS.ORDERS_APPROVE,
     PERMISSIONS.ORDERS_ASSIGN,
   ],
+  // Accounts team: checks the bank / UPI app and confirms how much of each QR payment arrived.
+  ACCOUNTS: [
+    PERMISSIONS.PAYMENTS_VERIFY,
+  ],
 };
 
-const ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'MODERATOR'];
+const ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'MODERATOR', 'ACCOUNTS'];
 
 const effectivePermissions = (admin) => {
   if (!admin) return [];

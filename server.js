@@ -23,6 +23,7 @@ const settlementRoutes = require("./routes/settlementRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
 const reportRoutes = require("./routes/reportRoutes");
 const passwordResetRoutes = require("./routes/passwordResetRoutes");
+const paymentRoutes = require("./routes/paymentRoutes");
 const legalRoutes = require("./routes/legalRoutes");
 
 // App Config
@@ -78,6 +79,7 @@ app.use("/api/settlements", settlementRoutes);
 app.use("/api/settings", settingsRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/password-resets", passwordResetRoutes);
+app.use("/api/payments", paymentRoutes);
 
 app.use("/api", (req, res) => {
   res.status(404).json({ success: false, code: "NOT_FOUND", message: t(req, "NOT_FOUND") });

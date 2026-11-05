@@ -1,6 +1,6 @@
 const express = require('express');
 const c = require('../controllers/orderController');
-const { protect, farmerOnly, partnerOnly, adminOnly, requirePermission } = require('../middleware/authMiddleware');
+const { protect, farmerOnly, partnerOnly, adminOnly, superAdminOnly, requirePermission } = require('../middleware/authMiddleware');
 const { PERMISSIONS: P } = require('../utils/permissions');
 
 const router = express.Router();
@@ -30,6 +30,10 @@ router.patch('/:id/release', requirePermission(P.ORDERS_ASSIGN), c.releaseOrder)
 // Admin — payments
 router.patch('/:id/payment/verify', requirePermission(P.PAYMENTS_VERIFY), c.verifyPayment);
 router.patch('/:id/payment/refund', requirePermission(P.PAYMENTS_VERIFY), c.recordRefund);
+// Payment ledger: Accounts team reviews each QR payment; the Super Admin corrects or records entries.
+router.patch('/:id/payments/:entryId/review', requirePermission(P.PAYMENTS_VERIFY), c.reviewPaymentEntry);
+router.patch('/:id/payments/:entryId', superAdminOnly, c.editPaymentEntry);
+router.post('/:id/payments', superAdminOnly, c.addManualPayment);
 
 // Delivery partner
 router.patch('/:id/accept', partnerOnly, c.acceptOrder);
