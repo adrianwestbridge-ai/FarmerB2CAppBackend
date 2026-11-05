@@ -960,8 +960,8 @@ const seedData = async () => {
       // Demo QR for the demo UPI ID above; the Super Admin uploads the real one in Business settings.
       upiQrImage: `data:image/png;base64,${require('fs').readFileSync(require('path').join(__dirname, 'seed-assets', 'demo-upi-qr.png')).toString('base64')}`,
       helplineNumber: '18001234567',
-      paymentInstructions: 'Pay the exact total by scanning the QR, then enter the 12-digit UPI transaction reference (UTR).',
-      paymentInstructionsHi: 'QR स्कैन करके पूरी राशि का भुगतान करें, फिर 12 अंकों का UPI लेनदेन संदर्भ (UTR) दर्ज करें।',
+      paymentInstructions: 'Scan the QR and pay the full amount or a part, then enter the amount paid and the 12-digit UTR. Anything left is collected in cash on delivery.',
+      paymentInstructionsHi: 'QR स्कैन करके पूरी राशि या उसका कुछ हिस्सा दें, फिर भुगतान की गई राशि और 12 अंकों का UTR दर्ज करें। बाकी राशि डिलीवरी पर नकद ली जाएगी।',
     });
 
     const day = 24 * 3600 * 1000;
