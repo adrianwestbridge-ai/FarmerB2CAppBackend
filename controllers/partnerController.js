@@ -67,6 +67,8 @@ exports.createPartner = async (req, res) => {
     vehicleName: cleanText(body.vehicleName, 80),
     vehicleNumber: cleanText(body.vehicleNumber, 20),
     profileUrl: cleanImage(body.profileUrl),
+    // A new partner starts offline and goes online from the app when ready to take orders.
+    online: false,
     createdBy: String(req.user._id),
   });
   await audit(req, { action: 'PARTNER_CREATED', entityType: 'PARTNER', entityId: partner._id, entityRef: phoneNumber, toStatus: 'Active' });
