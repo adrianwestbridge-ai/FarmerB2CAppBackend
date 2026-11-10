@@ -1130,6 +1130,8 @@ async function login(identifier, password) {
     d = expectStatus(await call('PATCH', `/orders/${o._id}/payments/${d.payments[0]._id}/review`, { token: ctx.accounts.token, body: { approved: true } }), 200).data;
     assert.equal(d.paymentStatus, 'PAID');
     assert.equal(d.balanceDue, 0);
+    // Nothing is missing any more, so it is no longer a short collection against the partner.
+    assert.equal(d.collectionStatus, 'COLLECTED');
   });
 
   await step('cancelled part-paid order: refund is what was actually confirmed', async () => {

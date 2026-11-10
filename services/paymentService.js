@@ -66,6 +66,10 @@ const recomputePayment = (order, req, note = '') => {
       // so the farmer is never asked to pay twice; a rejected QR payment raises it again).
       order.expectedCollection = Math.max(0, toMoney(order.totalAmount - confirmed - pending));
       order.collectionStatus = order.expectedCollection > 0 ? 'PENDING' : 'NOT_APPLICABLE';
+    } else if (order.collectionStatus === 'DISPUTED' && next === 'PAID') {
+      // Short cash at the door that the farmer later paid by QR: nothing is missing any more,
+      // so it no longer counts as a short collection against the delivery partner.
+      order.collectionStatus = 'COLLECTED';
     }
   }
 

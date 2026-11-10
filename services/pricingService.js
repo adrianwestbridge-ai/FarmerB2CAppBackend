@@ -88,7 +88,8 @@ const productPricing = (product, candidates = []) => {
     finalPrice,
     discountPerUnit,
     savingsFromMrp: totalSavings,
-    savingsPercent: mrp > 0 ? Math.round((totalSavings / mrp) * 100) : 0,
+    // Rounded to 2 decimals first so float noise cannot flip 14.5% between 14 and 15; the app uses the same rule.
+    savingsPercent: mrp > 0 ? Math.max(0, Math.round(Math.round((totalSavings / mrp) * 10000) / 100)) : 0,
     offer: offerSummary(offer),
     // An offer with a minimum purchase is shown, but only applies in the cart when eligible.
     offerConditional: !!(offer && ((offer.minPurchaseAmount || 0) > 0 || (offer.minQuantity || 1) > 1)),
