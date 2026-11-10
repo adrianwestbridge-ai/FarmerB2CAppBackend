@@ -567,6 +567,10 @@ async function login(identifier, password) {
     assert.equal(c.status, 'CANCELLED');
     assert.equal(c.paymentStatus, 'REFUND_PENDING');
     assert.equal(c.refundAmount, o.totalAmount);
+    // Never more than the farmer paid.
+    const tooMuch = await call('PATCH', `/orders/${o._id}/payment/refund`, { token: ctx.opsAdmin.token, body: { amount: o.totalAmount + 100, refundReference: 'RFND1' } });
+    expectStatus(tooMuch, 400);
+    assert.equal(tooMuch.body.code, 'REFUND_AMOUNT_TOO_HIGH');
     c = expectStatus(await call('PATCH', `/orders/${o._id}/payment/refund`, { token: ctx.opsAdmin.token, body: { refundReference: 'RFND778899', reason: 'Order cancelled' } }), 200).data;
     assert.equal(c.paymentStatus, 'REFUNDED');
     expectStatus(await call('PATCH', `/orders/${o._id}/payment/refund`, { token: ctx.opsAdmin.token, body: {} }), 409);

@@ -556,6 +556,9 @@ const recordRefund = async (req, id, { refundReference, amount, reason }) => {
   if (order.paymentStatus !== 'REFUND_PENDING') throw new AppError(409, 'REFUND_NOT_APPLICABLE');
   const refundAmount = amount !== undefined && amount !== '' ? toMoney(amount) : order.refundAmount || order.totalAmount;
   if (!(refundAmount > 0)) throw new AppError(400, 'VALIDATION_FAILED');
+  // Never refund more than the farmer actually paid (confirmed QR payments).
+  const maxRefund = toMoney(order.amountPaidOnline || order.refundAmount || 0);
+  if (refundAmount > maxRefund) throw new AppError(400, 'REFUND_AMOUNT_TOO_HIGH', { max: maxRefund });
   order.refundAmount = refundAmount;
   order.refundReference = cleanText(refundReference, 60);
   order.refundReason = cleanText(reason, 300);
