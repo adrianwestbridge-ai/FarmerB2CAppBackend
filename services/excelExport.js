@@ -124,7 +124,7 @@ const buildWorkbook = async ({ query, includeAdmins, generatedBy }) => {
     includeAdmins ? run(reports.adminActivity, q, true) : null,
     run(reports.partners, q),
     Farmer.find({}).sort({ createdAt: -1 }).lean(),
-    Partner.find({}).sort({ createdAt: -1 }).lean(),
+    Partner.find({ status: { $ne: 'Deleted' } }).sort({ createdAt: -1 }).lean(),
     includeAdmins ? Admin.find({ status: { $ne: 'Deleted' } }).sort({ createdAt: 1 }).lean() : [],
   ]);
 

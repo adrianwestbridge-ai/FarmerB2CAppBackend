@@ -1165,6 +1165,48 @@ async function login(identifier, password) {
     assert.equal(o.expectedCollection, 0);
   });
 
+  // ═══ 13. Deleting a delivery partner ═══════════════════════════════════════
+  console.log('\n13. Deleting a delivery partner');
+
+  await step('Super Admin deletes a delivery partner only after deliveries and cash are settled', async () => {
+    const phone = `97${String(Math.floor(Math.random() * 1e8)).padStart(8, '0')}`;
+    const p = expectStatus(await call('POST', '/partners', { token: ctx.superAdmin.token, body: { name: 'Temp Rider', phoneNumber: phone, password: 'Rider@123', confirmPassword: 'Rider@123', vehicleName: 'Bike' } }), 201).data;
+    const rider = await login(phone, 'Rider@123');
+    expectStatus(await call('PUT', '/auth/me', { token: rider.token, body: { online: true } }), 200);
+    const items = [{ productId: ctx.npk._id, quantity: 1 }];
+    const o = expectStatus(await call('POST', '/orders', { token: ctx.farmer.token, body: { items, deliveryAddress: 'Farm', paymentMethod: 'COD' } }), 201).data;
+    expectStatus(await call('PATCH', `/orders/${o._id}/verification`, { token: ctx.orderDesk.token, body: { outcome: 'CONFIRMED', note: 'ok' } }), 200);
+    expectStatus(await call('PATCH', `/orders/${o._id}/approve`, { token: ctx.orderDesk.token }), 200);
+    expectStatus(await call('PATCH', `/orders/${o._id}/accept`, { token: rider.token }), 200);
+    expectStatus(await call('PATCH', `/orders/${o._id}/pickup`, { token: rider.token }), 200);
+
+    // Only the Super Admin, and only with the right mobile number typed.
+    expectStatus(await call('DELETE', `/partners/${p._id}`, { token: ctx.opsAdmin.token, body: { confirmPhone: phone } }), 403);
+    let r = await call('DELETE', `/partners/${p._id}`, { token: ctx.superAdmin.token, body: { confirmPhone: '9000000000' } });
+    expectStatus(r, 400); assert.equal(r.body.code, 'PARTNER_DELETE_CONFIRM');
+    // Not while goods are on the way.
+    r = await call('DELETE', `/partners/${p._id}`, { token: ctx.superAdmin.token, body: { confirmPhone: phone } });
+    expectStatus(r, 409); assert.equal(r.body.code, 'PARTNER_HAS_ACTIVE_DELIVERY');
+    // Not while holding cash.
+    expectStatus(await call('PATCH', `/orders/${o._id}/deliver`, { token: rider.token, body: { amountCollected: o.totalAmount } }), 200);
+    r = await call('DELETE', `/partners/${p._id}`, { token: ctx.superAdmin.token, body: { confirmPhone: phone } });
+    expectStatus(r, 409); assert.equal(r.body.code, 'PARTNER_HAS_CASH');
+    // After handing the cash over it can be deleted.
+    expectStatus(await call('POST', '/settlements', { token: rider.token, body: { submittedAmount: o.totalAmount, handoverReference: 'R-1' } }), 201);
+    r = await call('DELETE', `/partners/${p._id}`, { token: ctx.superAdmin.token, body: { confirmPhone: phone, reason: 'Left the job' } });
+    expectStatus(r, 200);
+    assert.equal(r.body.data.status, 'Deleted');
+
+    // Signed out, cannot log in, hidden from the list, history kept, number free again.
+    expectStatus(await call('GET', '/auth/me', { token: rider.token }), 401);
+    expectStatus(await call('POST', '/auth/login', { body: { identifier: phone, password: 'Rider@123' } }), 401);
+    const list = expectStatus(await call('GET', '/partners', { token: ctx.superAdmin.token }), 200).data;
+    assert.ok(!list.some((x) => String(x._id) === String(p._id)), 'deleted partner hidden from the list');
+    const delivered = expectStatus(await call('GET', `/orders/${o._id}`, { token: ctx.superAdmin.token }), 200).data;
+    assert.equal(delivered.status, 'DELIVERED');
+    expectStatus(await call('POST', '/partners', { token: ctx.superAdmin.token, body: { name: 'New Rider', phoneNumber: phone, password: 'Rider@123', confirmPassword: 'Rider@123' } }), 201);
+  });
+
   console.log(`\n${passed} passed, ${failures.length} failed`);
   process.exit(failures.length ? 1 : 0);
 })().catch((err) => {

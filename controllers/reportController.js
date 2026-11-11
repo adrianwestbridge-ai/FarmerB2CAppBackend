@@ -636,7 +636,7 @@ exports.overview = async (req, res) => {
   ] = await Promise.all([
     periodTotals(todayStart), periodTotals(monthStart), periodTotals(null),
     Farmer.countDocuments({}), Farmer.countDocuments({ status: 'Active' }), Farmer.countDocuments({ createdAt: { $gte: monthStart } }),
-    Partner.countDocuments({}), Partner.countDocuments({ status: 'Active' }), Partner.countDocuments({ status: 'Active', online: true }),
+    Partner.countDocuments({ status: { $ne: 'Deleted' } }), Partner.countDocuments({ status: 'Active' }), Partner.countDocuments({ status: 'Active', online: true }),
     Admin.countDocuments({ status: { $ne: 'Deleted' } }), Admin.countDocuments({ status: 'Active' }),
     Order.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]),
     Order.aggregate([

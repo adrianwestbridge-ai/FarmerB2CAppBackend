@@ -1,6 +1,6 @@
 const express = require('express');
 const c = require('../controllers/partnerController');
-const { protect, requirePermission } = require('../middleware/authMiddleware');
+const { protect, requirePermission, superAdminOnly } = require('../middleware/authMiddleware');
 const { PERMISSIONS: P } = require('../utils/permissions');
 
 const router = express.Router();
@@ -14,5 +14,6 @@ router.post('/', requirePermission(P.USERS_MANAGE), c.createPartner);
 router.put('/:id', requirePermission(P.USERS_MANAGE), c.updatePartner);
 router.patch('/:id/status', requirePermission(P.USERS_MANAGE), c.setPartnerStatus);
 router.patch('/:id/password', requirePermission(P.USERS_MANAGE), c.resetPartnerPassword);
+router.delete('/:id', superAdminOnly, c.deletePartner);
 
 module.exports = router;

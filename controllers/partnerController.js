@@ -1,4 +1,5 @@
 const Partner = require('../models/Partner');
+const Order = require('../models/Order');
 const { AppError, t } = require('../utils/i18n');
 const { audit } = require('../utils/audit');
 const { requireValidId, escapeRegex, cleanText, cleanImage, normalizePhone } = require('../utils/validators');
@@ -9,7 +10,8 @@ const { partnerStats, emptyPartnerStats, recentOrdersOfPartner, recentSettlement
 // @route GET /api/partners?status&online&search  (admin)
 exports.getPartners = async (req, res) => {
   const filter = {};
-  if (req.query.status && ['Active', 'Suspended', 'Pending'].includes(req.query.status)) filter.status = req.query.status;
+  if (req.query.status && ['Active', 'Suspended', 'Pending', 'Deleted'].includes(req.query.status)) filter.status = req.query.status;
+  else filter.status = { $ne: 'Deleted' };
   if (req.query.online === 'true') filter.online = true;
   if (req.query.online === 'false') filter.online = false;
   if (req.query.search) {
@@ -123,6 +125,47 @@ exports.setPartnerStatus = async (req, res) => {
     });
   }
   res.status(200).json({ success: true, data: partner });
+};
+
+// @route DELETE /api/partners/:id  { confirmPhone, reason }  (Super Admin)
+// Closes the account for good: login stops, waiting orders go back to the pool and the mobile
+// number is freed for a new partner. Past deliveries, cash and handovers keep the partner's name.
+exports.deletePartner = async (req, res) => {
+  const partner = await Partner.findById(requireValidId(req.params.id));
+  if (!partner || partner.status === 'Deleted') throw new AppError(404, 'USER_NOT_FOUND');
+  const confirm = String((req.body || {}).confirmPhone || '').replace(/\D/g, '').slice(-10);
+  if (confirm !== partner.phoneNumber) throw new AppError(400, 'PARTNER_DELETE_CONFIRM');
+  // Goods already picked up must be delivered (or reported failed) first.
+  const onTheWay = await Order.countDocuments({ assignedPartnerId: partner._id, status: 'OUT_FOR_DELIVERY' });
+  if (onTheWay > 0) throw new AppError(409, 'PARTNER_HAS_ACTIVE_DELIVERY', { count: onTheWay });
+  // Cash collected but not yet handed to the office must be settled first.
+  const cash = await Order.aggregate([
+    { $match: { deliveredBy: partner._id, amountCollected: { $gt: 0 }, settlementStatus: 'PENDING' } },
+    { $group: { _id: null, total: { $sum: '$amountCollected' } } },
+  ]);
+  const cashHeld = cash.length ? Math.round(cash[0].total * 100) / 100 : 0;
+  if (cashHeld > 0) throw new AppError(409, 'PARTNER_HAS_CASH', { amount: cashHeld });
+
+  const from = partner.status;
+  partner.online = false;
+  await releaseOrdersOfPartner(req, partner, 'Delivery partner deleted');
+  partner.status = 'Deleted';
+  partner.deletedAt = new Date();
+  partner.deletedPhoneNumber = partner.phoneNumber;
+  partner.phoneNumber = `deleted_${partner._id}`;
+  partner.username = undefined;
+  partner.tokenVersion = (partner.tokenVersion || 0) + 1; // signs out every session
+  await partner.save({ validateBeforeSave: false });
+  await audit(req, {
+    action: 'PARTNER_DELETED',
+    entityType: 'PARTNER',
+    entityId: partner._id,
+    entityRef: partner.deletedPhoneNumber,
+    fromStatus: from,
+    toStatus: 'Deleted',
+    reason: cleanText((req.body || {}).reason, 300),
+  });
+  res.status(200).json({ success: true, message: t(req, 'PARTNER_DELETED'), data: partner });
 };
 
 // @route PATCH /api/partners/:id/password  { newPassword, confirmPassword }
