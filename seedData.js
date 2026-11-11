@@ -105,15 +105,6 @@ const seedData = async () => {
         status: 'Active',
       },
       {
-        owner_id: 'admin_002',
-        username: 'mod_username',
-        password: 'Mod@123',
-        name: 'Agricultural Moderator',
-        role: 'MODERATOR',
-        permissions: DEFAULT_PERMISSIONS.MODERATOR,
-        status: 'Active',
-      },
-      {
         owner_id: 'admin_003',
         username: 'ops_admin',
         password: 'Ops@1234',
@@ -1103,7 +1094,6 @@ const seedData = async () => {
     console.log('Farmer Demo Username : ramesh_patel (Password: 123456)');
     console.log('Super Admin       : admin_username (Password: Admin@123)');
     console.log('Admin             : ops_admin (Password: Ops@1234)');
-    console.log('Moderator         : mod_username (Password: Mod@123)');
     console.log('Accounts team     : accounts_team (Password: Acc@1234)');
     console.log('Partner Phone     : 9888877777 (Password: 123456)');
     console.log('----------------------------------------------------');

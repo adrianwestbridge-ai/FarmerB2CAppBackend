@@ -1,5 +1,5 @@
 // Fine-grained admin permissions. The Super Admin implicitly holds every permission;
-// ADMIN / MODERATOR accounts hold whatever the Super Admin assigns (defaults below).
+// ADMIN / ACCOUNTS accounts hold whatever the Super Admin assigns (defaults below).
 
 const PERMISSIONS = {
   ORDERS_APPROVE: 'ORDERS_APPROVE',         // verify farmer by phone, approve / reject / cancel orders
@@ -24,17 +24,13 @@ const DEFAULT_PERMISSIONS = {
     PERMISSIONS.USERS_MANAGE,
     PERMISSIONS.SETTLEMENTS_MANAGE,
   ],
-  MODERATOR: [
-    PERMISSIONS.ORDERS_APPROVE,
-    PERMISSIONS.ORDERS_ASSIGN,
-  ],
   // Accounts team: checks the bank / UPI app and confirms how much of each QR payment arrived.
   ACCOUNTS: [
     PERMISSIONS.PAYMENTS_VERIFY,
   ],
 };
 
-const ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'MODERATOR', 'ACCOUNTS'];
+const ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'ACCOUNTS'];
 
 const effectivePermissions = (admin) => {
   if (!admin) return [];

@@ -8,7 +8,7 @@ const adminSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
   phoneNumber: { type: String, default: '', trim: true },
   email: { type: String, default: '', trim: true },
-  role: { type: String, required: true, enum: ['SUPER_ADMIN', 'MODERATOR', 'ADMIN', 'ACCOUNTS'], default: 'ADMIN' },
+  role: { type: String, required: true, enum: ['SUPER_ADMIN', 'ADMIN', 'ACCOUNTS'], default: 'ADMIN' },
   permissions: [{ type: String, enum: ALL_PERMISSIONS }],
   profileUrl: { type: String, default: '' },
   coverImageUrl: { type: String, default: '' },

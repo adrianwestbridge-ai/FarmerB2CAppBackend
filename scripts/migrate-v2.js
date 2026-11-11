@@ -32,7 +32,7 @@ async function run() {
   for (const a of await db.collection('admins').find({}).toArray()) {
     const set = {};
     if (!['Active', 'Deactivated', 'Deleted'].includes(a.status)) set.status = a.status === 'Verified' ? 'Active' : 'Deactivated';
-    if (a.role !== 'SUPER_ADMIN' && !Array.isArray(a.permissions)) set.permissions = DEFAULT_PERMISSIONS[a.role] || DEFAULT_PERMISSIONS.MODERATOR;
+    if (a.role !== 'SUPER_ADMIN' && !Array.isArray(a.permissions)) set.permissions = DEFAULT_PERMISSIONS[a.role] || DEFAULT_PERMISSIONS.ADMIN;
     if (a.username && a.username !== String(a.username).toLowerCase()) set.username = String(a.username).toLowerCase();
     if (Object.keys(set).length) { report.admins += 1; await write('admins', { _id: a._id }, { $set: set }); }
   }

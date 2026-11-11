@@ -93,12 +93,20 @@ async function login(identifier, password) {
   await step('all roles log in and get their permissions', async () => {
     ctx.superAdmin = await login('admin_username', 'Admin@123');
     ctx.opsAdmin = await login('ops_admin', 'Ops@1234');
-    ctx.moderator = await login('mod_username', 'Mod@123');
+    // There is no Moderator role any more: an Admin with only the order-desk permissions does that job.
+    const bad = await call('POST', '/admins', { token: ctx.superAdmin.token, body: { username: `mod_${rnd()}`, name: 'Old role', password: 'Desk@1234', role: 'MODERATOR' } });
+    expectStatus(bad, 400);
+    assert.equal(bad.body.code, 'ADMIN_ROLE_INVALID');
+    const deskUser = `desk_${rnd()}`;
+    expectStatus(await call('POST', '/admins', { token: ctx.superAdmin.token, body: { username: deskUser, name: 'Order Desk', password: 'Desk@1234', role: 'ADMIN', permissions: ['ORDERS_APPROVE', 'ORDERS_ASSIGN'] } }), 201);
+    ctx.orderDesk = await login(deskUser, 'Desk@1234');
+    ctx.orderDesk.username = deskUser;
     ctx.partnerA = await login('9888877777', '123456');
     ctx.partnerB = await login('9777766666', '123456');
     assert.equal(ctx.superAdmin.userType, 'admin');
     assert.ok(ctx.superAdmin.permissions.includes('REPORTS_VIEW'));
-    assert.deepEqual(ctx.moderator.permissions.sort(), ['ORDERS_APPROVE', 'ORDERS_ASSIGN']);
+    assert.deepEqual(ctx.orderDesk.permissions.sort(), ['ORDERS_APPROVE', 'ORDERS_ASSIGN']);
+    assert.equal(ctx.orderDesk.data.role, 'ADMIN');
     assert.equal(ctx.partnerA.userType, 'partner');
   });
 
@@ -164,7 +172,7 @@ async function login(identifier, password) {
     expectStatus(await call('GET', '/admins', { token: ctx.opsAdmin.token }), 403);
     expectStatus(await call('POST', '/admins', { token: ctx.opsAdmin.token, body: {} }), 403);
     expectStatus(await call('PUT', '/settings', { token: ctx.opsAdmin.token, body: {} }), 403);
-    expectStatus(await call('POST', '/offers', { token: ctx.moderator.token, body: {} }), 403);
+    expectStatus(await call('POST', '/offers', { token: ctx.orderDesk.token, body: {} }), 403);
     expectStatus(await call('GET', '/reports/summary', { token: ctx.opsAdmin.token }), 403);
   });
 
@@ -335,32 +343,32 @@ async function login(identifier, password) {
   });
 
   await step('admin sees full order details incl. farmer mobile and payment info', async () => {
-    const o = expectStatus(await call('GET', `/orders/${ctx.order1._id}`, { token: ctx.moderator.token }), 200).data;
+    const o = expectStatus(await call('GET', `/orders/${ctx.order1._id}`, { token: ctx.orderDesk.token }), 200).data;
     assert.equal(o.farmerPhone, '9999999999');
     assert.equal(o.items.length, 2);
     assert.ok(o.mrpTotal >= o.subtotal);
-    const list = expectStatus(await call('GET', '/orders?status=PENDING_APPROVAL&sort=oldest', { token: ctx.moderator.token }), 200);
+    const list = expectStatus(await call('GET', '/orders?status=PENDING_APPROVAL&sort=oldest', { token: ctx.orderDesk.token }), 200);
     assert.ok(list.data.some((x) => x._id === ctx.order1._id));
   });
 
   await step('approval requires a confirmed phone verification', async () => {
     const id = ctx.order1._id;
-    let r = await call('PATCH', `/orders/${id}/approve`, { token: ctx.moderator.token });
+    let r = await call('PATCH', `/orders/${id}/approve`, { token: ctx.orderDesk.token });
     assert.equal(r.body.code, 'ORDER_VERIFICATION_REQUIRED');
-    r = await call('PATCH', `/orders/${id}/verification`, { token: ctx.moderator.token, body: { outcome: 'NOT_REACHABLE', note: 'No answer' } });
+    r = await call('PATCH', `/orders/${id}/verification`, { token: ctx.orderDesk.token, body: { outcome: 'NOT_REACHABLE', note: 'No answer' } });
     expectStatus(r, 200);
-    r = await call('PATCH', `/orders/${id}/approve`, { token: ctx.moderator.token });
+    r = await call('PATCH', `/orders/${id}/approve`, { token: ctx.orderDesk.token });
     assert.equal(r.body.code, 'ORDER_VERIFICATION_REQUIRED');
-    r = await call('PATCH', `/orders/${id}/verification`, { token: ctx.moderator.token, body: { outcome: 'CONFIRMED', note: 'Farmer confirmed' } });
+    r = await call('PATCH', `/orders/${id}/verification`, { token: ctx.orderDesk.token, body: { outcome: 'CONFIRMED', note: 'Farmer confirmed' } });
     assert.equal(expectStatus(r, 200).data.verificationCalls.length, 2);
     expectStatus(await call('PATCH', `/orders/${id}/approve`, { token: ctx.partnerA.token }), 403);
     expectStatus(await call('PATCH', `/orders/${id}/approve`, { token: ctx.farmer.token }), 403);
-    const o = expectStatus(await call('PATCH', `/orders/${id}/approve`, { token: ctx.moderator.token }), 200).data;
+    const o = expectStatus(await call('PATCH', `/orders/${id}/approve`, { token: ctx.orderDesk.token }), 200).data;
     assert.equal(o.status, 'APPROVED');
-    assert.equal(o.decisionByName, 'Agricultural Moderator');
+    assert.equal(o.decisionByName, 'Order Desk');
     assert.ok(o.approvedAt);
     // Cannot approve twice
-    expectStatus(await call('PATCH', `/orders/${id}/approve`, { token: ctx.moderator.token }), 409);
+    expectStatus(await call('PATCH', `/orders/${id}/approve`, { token: ctx.orderDesk.token }), 409);
   });
 
   await step('farmer sees status history without internal admin identities', async () => {
@@ -468,7 +476,7 @@ async function login(identifier, password) {
     const f = expectStatus(await call('PATCH', `/orders/${o._id}/fail`, { token: ctx.partnerB.token, body: { reason: 'Farmer not at home' } }), 200).data;
     assert.equal(f.status, 'DELIVERY_FAILED');
     assert.equal(f.failureReason, 'Farmer not at home');
-    const re = expectStatus(await call('PATCH', `/orders/${o._id}/assign`, { token: ctx.moderator.token, body: { partnerId: ctx.partnerA.data._id } }), 200).data;
+    const re = expectStatus(await call('PATCH', `/orders/${o._id}/assign`, { token: ctx.orderDesk.token, body: { partnerId: ctx.partnerA.data._id } }), 200).data;
     assert.equal(re.status, 'ASSIGNED');
     assert.equal(re.assignedPartnerName, 'Harpreet Singh');
     expectStatus(await call('PATCH', `/orders/${o._id}/pickup`, { token: ctx.partnerB.token }), 403);
@@ -535,7 +543,7 @@ async function login(identifier, password) {
 
   await step('payment failure → farmer resubmits → admin verifies → paid', async () => {
     const id = ctx.online._id;
-    expectStatus(await call('PATCH', `/orders/${id}/payment/verify`, { token: ctx.moderator.token, body: { approved: true } }), 403);
+    expectStatus(await call('PATCH', `/orders/${id}/payment/verify`, { token: ctx.orderDesk.token, body: { approved: true } }), 403);
     let o = expectStatus(await call('PATCH', `/orders/${id}/payment/verify`, { token: ctx.opsAdmin.token, body: { approved: false, reason: 'UTR not found in bank statement' } }), 200).data;
     assert.equal(o.paymentStatus, 'FAILED');
     const newUtr = utr12();
@@ -596,7 +604,7 @@ async function login(identifier, password) {
 
   await step('admin disputes then verifies settlement; orders follow the settlement status', async () => {
     const id = ctx.settlement._id;
-    expectStatus(await call('PATCH', `/settlements/${id}/verify`, { token: ctx.moderator.token }), 403);
+    expectStatus(await call('PATCH', `/settlements/${id}/verify`, { token: ctx.orderDesk.token }), 403);
     let s = expectStatus(await call('PATCH', `/settlements/${id}/dispute`, { token: ctx.opsAdmin.token, body: { reason: '₹5 short in cash count' } }), 200).data;
     assert.equal(s.status, 'DISPUTED');
     let ord = expectStatus(await call('GET', `/orders/${ctx.shortOrder._id}`, { token: ctx.opsAdmin.token }), 200).data;
@@ -723,7 +731,7 @@ async function login(identifier, password) {
   await step('admin-wise, partner-wise, farmer-wise, offer and product reports', async () => {
     const t = ctx.superAdmin.token;
     const admins = expectStatus(await call('GET', '/reports/admins', { token: t }), 200).data;
-    const mod = admins.find((a) => a.username === 'mod_username');
+    const mod = admins.find((a) => a.username === ctx.orderDesk.username);
     assert.ok(mod.approved >= 1 && mod.verificationCalls >= 2 && mod.reassigned >= 1);
     const partners = expectStatus(await call('GET', '/reports/partners', { token: t }), 200).data;
     const b = partners.find((p) => p.name === 'Rajesh Patil');
@@ -1032,7 +1040,7 @@ async function login(identifier, password) {
     assert.ok(row, 'pending QR payment listed');
     assert.equal(row.order.orderNumber, ctx.partOrder.orderNumber);
     assert.equal(row.order.balanceDue, ctx.partTotal);
-    expectStatus(await call('GET', '/payments', { token: ctx.moderator.token }), 403);
+    expectStatus(await call('GET', '/payments', { token: ctx.orderDesk.token }), 403);
     expectStatus(await call('GET', '/payments', { token: ctx.farmer.token }), 403);
     expectStatus(await call('GET', '/payments/summary', { token: ctx.accounts.token }), 403);
     // Accounts team cannot approve orders or edit entries.
@@ -1109,8 +1117,8 @@ async function login(identifier, password) {
 
   await step('delivery partner collects exactly the balance; order becomes fully paid', async () => {
     const id = ctx.partOrder._id;
-    expectStatus(await call('PATCH', `/orders/${id}/verification`, { token: ctx.moderator.token, body: { outcome: 'CONFIRMED', note: 'ok' } }), 200);
-    expectStatus(await call('PATCH', `/orders/${id}/approve`, { token: ctx.moderator.token }), 200);
+    expectStatus(await call('PATCH', `/orders/${id}/verification`, { token: ctx.orderDesk.token, body: { outcome: 'CONFIRMED', note: 'ok' } }), 200);
+    expectStatus(await call('PATCH', `/orders/${id}/approve`, { token: ctx.orderDesk.token }), 200);
     const pool = expectStatus(await call('GET', `/orders/${id}`, { token: ctx.partnerA.token }), 200).data;
     assert.equal(pool.expectedCollection, ctx.cashDue, 'partner sees what is left to collect');
     assert.equal(pool.amountPaidOnline, ctx.part + 100);
@@ -1129,8 +1137,8 @@ async function login(identifier, password) {
   await step('short cash on delivery leaves a balance the farmer can clear later by QR', async () => {
     const items = [{ productId: ctx.npk._id, quantity: 1 }];
     const o = expectStatus(await call('POST', '/orders', { token: ctx.farmer.token, body: { items, deliveryAddress: 'Farm', paymentMethod: 'COD' } }), 201).data;
-    expectStatus(await call('PATCH', `/orders/${o._id}/verification`, { token: ctx.moderator.token, body: { outcome: 'CONFIRMED', note: 'ok' } }), 200);
-    expectStatus(await call('PATCH', `/orders/${o._id}/approve`, { token: ctx.moderator.token }), 200);
+    expectStatus(await call('PATCH', `/orders/${o._id}/verification`, { token: ctx.orderDesk.token, body: { outcome: 'CONFIRMED', note: 'ok' } }), 200);
+    expectStatus(await call('PATCH', `/orders/${o._id}/approve`, { token: ctx.orderDesk.token }), 200);
     expectStatus(await call('PATCH', `/orders/${o._id}/accept`, { token: ctx.partnerA.token }), 200);
     expectStatus(await call('PATCH', `/orders/${o._id}/pickup`, { token: ctx.partnerA.token }), 200);
     const short = Math.round((o.totalAmount - 50) * 100) / 100;

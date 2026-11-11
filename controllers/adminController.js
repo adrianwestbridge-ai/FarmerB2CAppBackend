@@ -16,7 +16,7 @@ const parsePermissions = (raw, role) => {
 
 const parseRole = (role) => {
   const r = String(role || 'ADMIN').toUpperCase();
-  if (!['ADMIN', 'MODERATOR', 'ACCOUNTS'].includes(r)) throw new AppError(400, 'ADMIN_ROLE_INVALID');
+  if (!['ADMIN', 'ACCOUNTS'].includes(r)) throw new AppError(400, 'ADMIN_ROLE_INVALID');
   return r;
 };
 

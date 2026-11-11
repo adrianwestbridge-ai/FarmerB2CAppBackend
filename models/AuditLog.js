@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 // no API path (or accidental script using the model) can silently rewrite history.
 const auditLogSchema = new mongoose.Schema({
   actorId: { type: String, default: null, index: true },
-  actorRole: { type: String, default: 'SYSTEM', index: true }, // FARMER | PARTNER | ADMIN | MODERATOR | SUPER_ADMIN | SYSTEM | ANONYMOUS
+  actorRole: { type: String, default: 'SYSTEM', index: true }, // FARMER | PARTNER | ADMIN | ACCOUNTS | SUPER_ADMIN | SYSTEM | ANONYMOUS
   actorName: { type: String, default: '' },
   action: { type: String, required: true, index: true },
   entityType: { type: String, default: '', index: true }, // ORDER | ADMIN | FARMER | PARTNER | OFFER | SETTLEMENT | PRODUCT | SETTINGS | AUTH

@@ -313,7 +313,7 @@ const ADMIN_ACTION_LABELS = {
 
 // @route GET /api/reports/admins
 exports.adminActivity = async (req, res) => {
-  const match = { actorRole: { $in: ['SUPER_ADMIN', 'ADMIN', 'MODERATOR', 'ACCOUNTS'] }, action: { $in: Object.values(ADMIN_ACTIONS) } };
+  const match = { actorRole: { $in: ['SUPER_ADMIN', 'ADMIN', 'ACCOUNTS'] }, action: { $in: Object.values(ADMIN_ACTIONS) } };
   const range = dateRange(req.query);
   if (range) match.createdAt = range;
   if (req.query.adminId && isValidId(req.query.adminId)) match.actorId = String(req.query.adminId);
@@ -538,8 +538,8 @@ exports.activity = async (req, res) => {
   const range = dateRange(req.query);
   if (range) filter.createdAt = range;
   const role = String(req.query.role || '').toUpperCase();
-  if (role === 'ADMIN') filter.actorRole = { $in: ['SUPER_ADMIN', 'ADMIN', 'MODERATOR', 'ACCOUNTS'] };
-  else if (['FARMER', 'PARTNER', 'SUPER_ADMIN', 'MODERATOR', 'ACCOUNTS', 'ANONYMOUS'].includes(role)) filter.actorRole = role;
+  if (role === 'ADMIN') filter.actorRole = { $in: ['SUPER_ADMIN', 'ADMIN', 'ACCOUNTS'] };
+  else if (['FARMER', 'PARTNER', 'SUPER_ADMIN', 'ACCOUNTS', 'ANONYMOUS'].includes(role)) filter.actorRole = role;
   if (req.query.actorId) filter.actorId = cleanText(req.query.actorId, 40);
   if (req.query.entityType) filter.entityType = cleanText(req.query.entityType, 30).toUpperCase();
   if (req.query.action) filter.action = cleanText(req.query.action, 60).toUpperCase();
