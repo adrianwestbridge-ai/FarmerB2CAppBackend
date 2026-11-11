@@ -4,10 +4,20 @@ const Setting = require('../models/Setting');
 
 // The business's own payment QR (seed-assets/payment-qr.png or .jpg). It is shown whenever the
 // Super Admin has not uploaded another one, so farmers always get the right QR to pay.
+// The image type is read from the file itself (a JPEG saved as .png still works).
+const imageMime = (buf) => {
+  if (buf[0] === 0x89 && buf[1] === 0x50) return 'image/png';
+  if (buf[0] === 0xff && buf[1] === 0xd8) return 'image/jpeg';
+  if (buf.slice(0, 4).toString() === 'RIFF' && buf.slice(8, 12).toString() === 'WEBP') return 'image/webp';
+  return '';
+};
 const loadDefaultQr = () => {
-  for (const [file, mime] of [['payment-qr.png', 'image/png'], ['payment-qr.jpg', 'image/jpeg'], ['payment-qr.jpeg', 'image/jpeg']]) {
+  for (const file of ['payment-qr.png', 'payment-qr.jpg', 'payment-qr.jpeg', 'payment-qr.webp']) {
     const full = path.join(__dirname, '..', 'seed-assets', file);
-    if (fs.existsSync(full)) return `data:${mime};base64,${fs.readFileSync(full).toString('base64')}`;
+    if (!fs.existsSync(full)) continue;
+    const buf = fs.readFileSync(full);
+    const mime = imageMime(buf);
+    if (mime) return `data:${mime};base64,${buf.toString('base64')}`;
   }
   return '';
 };
