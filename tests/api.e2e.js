@@ -799,8 +799,16 @@ async function login(identifier, password) {
     const qr = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
     let res = await call('PUT', '/settings', { token: t, body: { upiQrImage: 'file:///sdcard/qr.png' } });
     assert.equal(res.body.code, 'UPI_QR_INVALID');
+    // With the business QR (seed-assets/payment-qr.*) on the server, clearing the uploaded QR
+    // falls back to it, so farmers always see a QR; without it, a QR is required for online payments.
+    const { DEFAULT_QR } = require('../utils/settings');
     res = await call('PUT', '/settings', { token: t, body: { upiQrImage: '', onlineEnabled: true } });
-    assert.equal(res.body.code, 'UPI_QR_REQUIRED');
+    if (DEFAULT_QR) {
+      expectStatus(res, 200);
+      assert.equal(expectStatus(await call('GET', '/settings/public'), 200).data.upiQrImage, DEFAULT_QR, 'falls back to the business QR');
+    } else {
+      assert.equal(res.body.code, 'UPI_QR_REQUIRED');
+    }
     res = await call('PUT', '/settings', { token: t, body: { helplineNumber: '12' } });
     assert.equal(res.body.code, 'HELPLINE_INVALID');
     expectStatus(await call('PUT', '/settings', { token: t, body: { upiQrImage: qr, helplineNumber: '1800 222 333' } }), 200);
