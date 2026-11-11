@@ -958,7 +958,8 @@ const seedData = async () => {
       upiId: 'agriharvest@upi',
       upiPayeeName: 'AgriHarvest Agro Pvt Ltd',
       // Demo QR for the demo UPI ID above; the Super Admin uploads the real one in Business settings.
-      upiQrImage: `data:image/png;base64,${require('fs').readFileSync(require('path').join(__dirname, 'seed-assets', 'demo-upi-qr.png')).toString('base64')}`,
+      // The business QR when seed-assets/payment-qr.* exists, otherwise a demo QR.
+      upiQrImage: require('./utils/settings').DEFAULT_QR || `data:image/png;base64,${require('fs').readFileSync(require('path').join(__dirname, 'seed-assets', 'demo-upi-qr.png')).toString('base64')}`,
       helplineNumber: '8305707892',
       paymentInstructions: 'Scan the QR and pay the full amount or a part, then enter the amount paid and the 12-digit UTR. Anything left is collected in cash on delivery.',
       paymentInstructionsHi: 'QR स्कैन करके पूरी राशि या उसका कुछ हिस्सा दें, फिर भुगतान की गई राशि और 12 अंकों का UTR दर्ज करें। बाकी राशि डिलीवरी पर नकद ली जाएगी।',

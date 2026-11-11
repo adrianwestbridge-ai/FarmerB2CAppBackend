@@ -1,6 +1,6 @@
 const { AppError } = require('../utils/i18n');
 const { audit } = require('../utils/audit');
-const { getSettings, publicSettings } = require('../utils/settings');
+const { getSettings, publicSettings, DEFAULT_QR } = require('../utils/settings');
 const { cleanText, cleanImage, toMoney, UPI_ID_RE, normalizeUpiId } = require('../utils/validators');
 
 // @route GET /api/settings/public — values the app needs before / after login
@@ -12,7 +12,8 @@ exports.getPublicSettings = async (req, res) => {
 // @route GET /api/settings  (super admin)
 exports.getSettings = async (req, res) => {
   const settings = await getSettings();
-  res.status(200).json({ success: true, data: settings });
+  // Show the business QR that farmers actually see when none has been uploaded.
+  res.status(200).json({ success: true, data: { ...settings.toObject(), upiQrImage: settings.upiQrImage || DEFAULT_QR } });
 };
 
 // @route PUT /api/settings  (super admin)
@@ -56,7 +57,7 @@ exports.updateSettings = async (req, res) => {
     settings.helplineNumber = helpline;
   }
   // Farmers pay online by scanning the QR the Super Admin uploads.
-  if (settings.onlineEnabled && !settings.upiQrImage) throw new AppError(400, 'UPI_QR_REQUIRED');
+  if (settings.onlineEnabled && !settings.upiQrImage && !DEFAULT_QR) throw new AppError(400, 'UPI_QR_REQUIRED');
   if (body.upiPayeeName !== undefined) settings.upiPayeeName = cleanText(body.upiPayeeName, 100);
   if (body.paymentInstructions !== undefined) settings.paymentInstructions = cleanText(body.paymentInstructions, 1000);
   if (body.paymentInstructionsHi !== undefined) settings.paymentInstructionsHi = cleanText(body.paymentInstructionsHi, 1000);

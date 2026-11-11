@@ -1,18 +1,31 @@
 const express = require('express');
+const { getSettings } = require('../utils/settings');
 
 const router = express.Router();
 
 // Public pages linked from the Google Play listing (privacy policy and account deletion).
-// The contact address comes from SUPPORT_EMAIL / SUPPORT_PHONE in the server's .env.
+// Contact: the helpline set in Business Settings (SUPPORT_PHONE in .env overrides it), plus SUPPORT_EMAIL if set.
 
 const esc = (s) => String(s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-const contactLine = () => {
+// 8305707892 / +918305707892 → +91 83057 07892 (other numbers are shown as entered).
+const formatPhone = (raw) => {
+  const p = String(raw || '').replace(/[^\d+]/g, '');
+  const m = p.match(/^(?:\+?91)?([6-9]\d{9})$/);
+  return m ? `+91 ${m[1].slice(0, 5)} ${m[1].slice(5)}` : p;
+};
+
+const helpline = async () => {
+  if (process.env.SUPPORT_PHONE) return process.env.SUPPORT_PHONE;
+  try { return (await getSettings()).helplineNumber || ''; } catch { return ''; }
+};
+
+const contactLine = (rawPhone) => {
   const email = process.env.SUPPORT_EMAIL;
-  const phone = process.env.SUPPORT_PHONE;
+  const phone = formatPhone(rawPhone);
   const parts = [];
   if (email) parts.push(`<a href="mailto:${esc(email)}">${esc(email)}</a>`);
-  if (phone) parts.push(`<a href="tel:${esc(phone)}">${esc(phone)}</a>`);
+  if (phone) parts.push(`<a href="tel:${esc(phone.replace(/\s/g, ''))}">${esc(phone)}</a>`);
   return parts.length ? parts.join(' · ') : 'the contact details shown in the AgriHarvest app';
 };
 
@@ -28,7 +41,8 @@ const page = (title, body) => `<!doctype html>
   .hi{border-top:1px solid #E5E5E0;margin-top:24px;padding-top:8px}
 </style></head><body><main>${body}</main></body></html>`;
 
-router.get('/privacy', (req, res) => {
+router.get('/privacy', async (req, res) => {
+  const phone = await helpline();
   res.type('html').send(page('Privacy policy', `
 <h1>AgriHarvest privacy policy</h1>
 <p class="muted">Last updated: 26 October 2026</p>
@@ -73,7 +87,7 @@ This policy explains what we collect, why, who can see it and how to delete your
 <p>Farmers can delete their account in the app: <b>Profile → Delete my account</b>. See <a href="/delete-account">how account deletion works</a>.</p>
 
 <h2>Contact</h2>
-<p>Questions about your data: ${contactLine()}.</p>
+<p>Questions about your data: ${contactLine(phone)}.</p>
 
 <div class="hi">
 <h2>हिंदी सारांश</h2>
@@ -84,7 +98,8 @@ This policy explains what we collect, why, who can see it and how to delete your
 </div>`));
 });
 
-router.get('/delete-account', (req, res) => {
+router.get('/delete-account', async (req, res) => {
+  const phone = await helpline();
   res.type('html').send(page('Delete your account', `
 <h1>Delete your AgriHarvest account</h1>
 <div class="card">
@@ -97,7 +112,7 @@ router.get('/delete-account', (req, res) => {
 <p class="muted">If an order is still in progress, cancel it or wait until it is delivered first.</p>
 
 <h2>Without the app</h2>
-<p>Contact us at ${contactLine()} from your registered mobile number and ask us to delete your account. We will confirm within 7 days.</p>
+<p>Contact us at ${contactLine(phone)} from your registered mobile number and ask us to delete your account. We will confirm within 7 days.</p>
 
 <h2>What is deleted</h2>
 <ul>
@@ -111,7 +126,7 @@ router.get('/delete-account', (req, res) => {
 <div class="hi">
 <h2>हिंदी में</h2>
 <p>ऐप में <b>प्रोफ़ाइल → मेरा खाता हटाएँ</b> दबाएँ, पासवर्ड डालें और पुष्टि करें। आपका नाम, पता, फ़ोटो और पासवर्ड हटा दिए जाते हैं।
-पुराने ऑर्डर का रिकॉर्ड कानून के अनुसार रखा जाता है। ऐप के बिना: ${contactLine()} पर अपने पंजीकृत नंबर से संपर्क करें।</p>
+पुराने ऑर्डर का रिकॉर्ड कानून के अनुसार रखा जाता है। ऐप के बिना: ${contactLine(phone)} पर अपने पंजीकृत नंबर से संपर्क करें।</p>
 </div>
 </div>`));
 });
